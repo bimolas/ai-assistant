@@ -1,18 +1,31 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { YoRHaCard } from '../components/YoRHaCard';
-import { YoRHaButton } from '../components/YoRHaButton';
-import { colors } from '../theme/colors';
-import { typography } from '../theme/typography';
-import { voiceAssistantService, VoiceCommand } from '../services/voiceAssistantService';
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import { YoRHaCard } from "../components/YoRHaCard";
+import { YoRHaButton } from "../components/YoRHaButton";
+import { colors } from "../theme/colors";
+import { typography } from "../theme/typography";
+import {
+  voiceAssistantService,
+  VoiceCommand,
+} from "../services/voiceAssistantService";
 
 export const VoiceAssistantScreen: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
-  const [commandText, setCommandText] = useState('');
+  const [commandText, setCommandText] = useState("");
   const [lastResponse, setLastResponse] = useState<string | null>(null);
-  const [availableCommands, setAvailableCommands] = useState<VoiceCommand[]>([]);
+  const [availableCommands, setAvailableCommands] = useState<VoiceCommand[]>(
+    []
+  );
+  const [isProcessing, setIsProcessing] = useState(false);
 
   useEffect(() => {
     loadCommands();
@@ -24,45 +37,70 @@ export const VoiceAssistantScreen: React.FC = () => {
   };
 
   const handleStartListening = async () => {
-    const result = await voiceAssistantService.startListening();
-    if (result) {
+    const success = await voiceAssistantService.startListening();
+    if (success) {
       setIsListening(true);
-      setLastResponse('Listening... Speak your command');
+      setLastResponse("Listening... Speak your command");
+    } else {
+      setLastResponse(
+        "Cannot start listening. Microphone permission required."
+      );
     }
   };
 
   const handleStopListening = async () => {
-    const uri = await voiceAssistantService.stopListening();
+    await voiceAssistantService.stopListening();
     setIsListening(false);
-    if (uri) {
-      setLastResponse('Processing command...');
-      // Note: In a full implementation, you'd send the audio to a speech recognition service
-      // For now, we'll use manual text input
-    }
+    setLastResponse("Stopped listening");
   };
 
   const handleProcessCommand = async () => {
     if (!commandText.trim()) return;
 
-    setLastResponse('Processing...');
+    setLastResponse("Processing...");
     const result = await voiceAssistantService.processCommand(commandText);
-    
+
     if (result.success) {
       setLastResponse(result.message || `Command executed: ${commandText}`);
     } else {
-      setLastResponse(result.message || `Unknown command: ${commandText}. Say "help" for available commands.`);
+      setLastResponse(
+        result.message ||
+          `Unknown command: ${commandText}. Say "help" for available commands.`
+      );
     }
-    setCommandText('');
+    setCommandText("");
   };
 
   const handleQuickCommand = async (command: string) => {
     setCommandText(command);
     await voiceAssistantService.processCommand(command);
   };
+  useEffect(() => {
+    // Set callbacks from service
+    voiceAssistantService.onStatusUpdate = (message: string) => {
+      setLastResponse(message);
+    };
+
+    voiceAssistantService.onListeningStateChange = (listening: boolean) => {
+      setIsListening(listening);
+    };
+
+    voiceAssistantService.onProcessingStateChange = (processing: boolean) => {
+      // Optional: show a spinner or disable buttons
+      console.log("Processing:", processing);
+    };
+
+    return () => {
+      // Clean up callbacks when screen unmounts
+      voiceAssistantService.onStatusUpdate = undefined;
+      voiceAssistantService.onListeningStateChange = undefined;
+      voiceAssistantService.onProcessingStateChange = undefined;
+    };
+  }, []);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView 
+    <SafeAreaView style={styles.container} edges={["top"]}>
+      <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="always"
         keyboardDismissMode="on-drag"
@@ -70,13 +108,17 @@ export const VoiceAssistantScreen: React.FC = () => {
         nestedScrollEnabled={true}
       >
         <View style={styles.spacer} />
-
         <YoRHaCard elevated style={styles.statusCard}>
           <Text style={styles.label}>VOICE ASSISTANT</Text>
           <View style={styles.statusRow}>
-            <View style={[styles.statusIndicator, isListening && styles.statusActive]} />
+            <View
+              style={[
+                styles.statusIndicator,
+                isListening && styles.statusActive,
+              ]}
+            />
             <Text style={styles.statusText}>
-              {isListening ? 'LISTENING' : 'STANDBY'}
+              {isListening ? "LISTENING" : "STANDBY"}
             </Text>
           </View>
         </YoRHaCard>
@@ -84,23 +126,21 @@ export const VoiceAssistantScreen: React.FC = () => {
         {/* Voice Control */}
         <YoRHaCard style={styles.controlCard}>
           <Text style={styles.label}>VOICE CONTROL</Text>
-          {!isListening ? (
-            <YoRHaButton
-              title="Start Listening"
-              onPress={handleStartListening}
-              variant="primary"
-              style={styles.controlButton}
-            />
-          ) : (
-            <YoRHaButton
-              title="Stop Listening"
-              onPress={handleStopListening}
-              variant="outline"
-              style={styles.controlButton}
-            />
-          )}
+          <YoRHaButton
+            title={isListening ? "Stop Listening" : "Start Listening"}
+            onPress={async () => {
+              if (isListening) {
+                await voiceAssistantService.stopListening();
+                setIsListening(false);
+              } else {
+                const started = await voiceAssistantService.startListening();
+                if (started) setIsListening(true);
+              }
+            }}
+            variant={isListening ? "outline" : "primary"}
+            style={styles.controlButton} // now this works just like the others
+          />
         </YoRHaCard>
-
         {/* Manual Command Input */}
         <View style={styles.inputContainer}>
           <TextInput
@@ -117,7 +157,6 @@ export const VoiceAssistantScreen: React.FC = () => {
             variant="primary"
           />
         </View>
-
         {/* Last Response */}
         {lastResponse && (
           <YoRHaCard style={styles.responseCard}>
@@ -125,7 +164,6 @@ export const VoiceAssistantScreen: React.FC = () => {
             <Text style={styles.responseText}>{lastResponse}</Text>
           </YoRHaCard>
         )}
-
         {/* App Launch Examples */}
         <YoRHaCard style={styles.examplesCard}>
           <Text style={styles.label}>APP LAUNCH EXAMPLES</Text>
@@ -149,7 +187,6 @@ export const VoiceAssistantScreen: React.FC = () => {
             </View>
           </View>
         </YoRHaCard>
-
         {/* Quick Commands */}
         <YoRHaCard style={styles.commandsCard}>
           <Text style={styles.label}>QUICK COMMANDS</Text>
@@ -166,7 +203,6 @@ export const VoiceAssistantScreen: React.FC = () => {
             ))}
           </View>
         </YoRHaCard>
-
         {/* Available Commands List */}
         <YoRHaCard style={styles.listCard}>
           <Text style={styles.label}>AVAILABLE COMMANDS</Text>
@@ -205,8 +241,8 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
   },
   statusIndicator: {
     width: 12,
@@ -226,7 +262,7 @@ const styles = StyleSheet.create({
   statusText: {
     ...typography.body,
     color: colors.textPrimary,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   controlCard: {
     marginBottom: 16,
@@ -257,13 +293,13 @@ const styles = StyleSheet.create({
   responseText: {
     ...typography.body,
     color: colors.textSecondary,
-    fontStyle: 'italic',
+    fontStyle: "italic",
   },
   hintText: {
     ...typography.bodySmall,
     color: colors.textSecondary,
     marginBottom: 12,
-    fontStyle: 'italic',
+    fontStyle: "italic",
   },
   examplesCard: {
     marginBottom: 16,
@@ -285,8 +321,8 @@ const styles = StyleSheet.create({
   exampleCommand: {
     ...typography.body,
     color: colors.accent,
-    fontWeight: '600',
-    fontFamily: 'monospace',
+    fontWeight: "600",
+    fontFamily: "monospace",
     marginBottom: 4,
   },
   exampleDesc: {
@@ -297,8 +333,8 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   commandsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
     marginTop: 12,
   },
@@ -320,9 +356,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   commandItem: {
-    flexDirection: 'row',
+    flexDirection: "row",
     marginBottom: 12,
-    alignItems: 'flex-start',
+    alignItems: "flex-start",
   },
   commandBullet: {
     width: 6,
@@ -338,7 +374,7 @@ const styles = StyleSheet.create({
   commandName: {
     ...typography.body,
     color: colors.textPrimary,
-    fontWeight: '600',
+    fontWeight: "600",
     marginBottom: 4,
   },
   commandDesc: {
@@ -346,4 +382,3 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
 });
-

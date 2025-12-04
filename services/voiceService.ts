@@ -1,5 +1,5 @@
-import * as Speech from 'expo-speech';
-import { Audio } from 'expo-av';
+import * as Speech from "expo-speech";
+import { Audio } from "expo-av";
 
 export class VoiceService {
   private static instance: VoiceService;
@@ -21,7 +21,7 @@ export class VoiceService {
     }
 
     return Speech.speak(text, {
-      language: 'en',
+      language: "en",
       pitch: options?.pitch || 1.0,
       rate: options?.rate || 0.9,
     });
@@ -53,26 +53,26 @@ export class VoiceService {
 
       this.recording = recording;
       this.isRecording = true;
-      return 'Recording started';
+      return "Recording started";
     } catch (err) {
-      console.error('Failed to start recording', err);
+      console.error("Failed to start recording", err);
       return null;
     }
   }
 
   async stopRecording(): Promise<string | null> {
-    if (!this.recording || !this.isRecording) {
-      return null;
-    }
+    if (!this.recording || !this.isRecording) return null;
 
     try {
       this.isRecording = false;
       await this.recording.stopAndUnloadAsync();
+
       const uri = this.recording.getURI();
       this.recording = null;
-      return uri;
-    } catch (error) {
-      console.error('Failed to stop recording', error);
+
+      return uri || null;
+    } catch (err) {
+      console.error("Failed to stop recording", err);
       return null;
     }
   }
@@ -81,7 +81,7 @@ export class VoiceService {
     try {
       const { sound } = await Audio.Sound.createAsync({ uri });
       await sound.playAsync();
-      
+
       return new Promise<void>((resolve) => {
         sound.setOnPlaybackStatusUpdate((status) => {
           if (status.isLoaded && status.didJustFinish) {
@@ -91,7 +91,7 @@ export class VoiceService {
         });
       });
     } catch (error) {
-      console.error('Failed to play recording', error);
+      console.error("Failed to play recording", error);
     }
   }
 
@@ -101,4 +101,3 @@ export class VoiceService {
 }
 
 export const voiceService = VoiceService.getInstance();
-

@@ -1,12 +1,16 @@
-import * as Speech from 'expo-speech';
-import { Audio } from 'expo-av';
-import { appDetectionService } from './appDetectionService';
-import { Platform } from 'react-native';
+import * as Speech from "expo-speech";
+import { Audio } from "expo-av";
+import * as FileSystem from "expo-file-system/legacy";
+import { appDetectionService } from "./appDetectionService";
+import axios from "axios";
+import { Buffer } from "buffer";
+import { DEEPGRAM_API_KEY } from "@env";
 
 export interface VoiceCommand {
   command: string;
   action: () => Promise<void> | void;
   description: string;
+  keywords: string[];
 }
 
 class VoiceAssistantService {
@@ -14,6 +18,9 @@ class VoiceAssistantService {
   private isListening = false;
   private recording: Audio.Recording | null = null;
   private commands: Map<string, VoiceCommand> = new Map();
+  private processingCommand = false;
+  private recordingTimer: NodeJS.Timeout | null = null;
+  private audioModeSet = false;
 
   static getInstance(): VoiceAssistantService {
     if (!VoiceAssistantService.instance) {
@@ -24,77 +31,73 @@ class VoiceAssistantService {
   }
 
   private initializeCommands() {
-    // System commands
+    // System commands with keywords for better matching
     this.registerCommand({
-      command: 'open settings',
-      description: 'Opens device settings',
+      command: "open settings",
+      description: "Opens device settings",
+      keywords: ["open", "settings"],
       action: async () => {
-        await this.speak('Opening settings');
-        // Would need expo-intent-launcher for this
+        await this.speak("Opening settings");
+        // Use expo-intent-launcher if needed
       },
     });
 
     this.registerCommand({
-      command: 'what time is it',
-      description: 'Tells the current time',
+      command: "what time is it",
+      description: "Tells the current time",
+      keywords: ["time"],
       action: async () => {
         const now = new Date();
-        const time = now.toLocaleTimeString();
-        await this.speak(`The time is ${time}`);
+        await this.speak(`The time is ${now.toLocaleTimeString()}`);
       },
     });
 
     this.registerCommand({
-      command: 'what day is it',
-      description: 'Tells the current date',
+      command: "what day is it",
+      description: "Tells the current date",
+      keywords: ["day", "date", "today"],
       action: async () => {
         const now = new Date();
-        const date = now.toLocaleDateString();
-        await this.speak(`Today is ${date}`);
+        await this.speak(`Today is ${now.toLocaleDateString()}`);
       },
     });
 
-    // App detection commands
     this.registerCommand({
-      command: 'list apps',
-      description: 'Lists installed apps',
+      command: "list apps",
+      description: "Lists installed apps",
+      keywords: ["list", "apps", "applications"],
       action: async () => {
-        await this.speak('Scanning installed applications');
-        const apps = await appDetectionService.getInstalledApps();
-        if (apps.length === 0) {
-          await this.speak('No applications detected. Full app detection requires additional permissions.');
-        } else {
-          await this.speak(`Found ${apps.length} application${apps.length > 1 ? 's' : ''}`);
+        try {
+          const apps = await appDetectionService.getInstalledApps();
+          if (apps.length === 0) {
+            await this.speak("No applications detected.");
+          } else {
+            await this.speak(`Found ${apps.length} applications`);
+          }
+        } catch (error) {
+          console.error("Error detecting apps:", error);
+          await this.speak("Unable to detect applications.");
         }
       },
     });
 
-    // Greeting commands
     this.registerCommand({
-      command: 'hello',
-      description: 'Greets the user',
+      command: "hello",
+      description: "Greets the user",
+      keywords: ["hello", "hi"],
       action: async () => {
-        await this.speak('Hello. Unit 2B at your service.');
+        await this.speak("Hello. Unit 2B at your service.");
       },
     });
 
     this.registerCommand({
-      command: 'status',
-      description: 'Reports system status',
+      command: "status",
+      description: "Reports system status",
+      keywords: ["status"],
       action: async () => {
-        await this.speak('All systems operational. Unit 2B ready for commands.');
-      },
-    });
-
-    // Help command
-    this.registerCommand({
-      command: 'help',
-      description: 'Lists available commands',
-      action: async () => {
-        const commandList = Array.from(this.commands.values())
-          .map(cmd => cmd.command)
-          .join(', ');
-        await this.speak(`Available commands: ${commandList}`);
+        await this.speak(
+          "All systems operational. Unit 2B ready for commands."
+        );
       },
     });
   }
@@ -103,187 +106,271 @@ class VoiceAssistantService {
     this.commands.set(command.command.toLowerCase(), command);
   }
 
-  async speak(text: string, options?: { rate?: number; pitch?: number }): Promise<void> {
-    const isSpeaking = await Speech.isSpeakingAsync();
-    if (isSpeaking) {
-      await Speech.stop();
-    }
+  async speak(
+    text: string,
+    options?: { rate?: number; pitch?: number }
+  ): Promise<void> {
+    try {
+      const isSpeaking = await Speech.isSpeakingAsync();
+      if (isSpeaking) await Speech.stop();
 
-    return Speech.speak(text, {
-      language: 'en',
-      pitch: options?.pitch || 1.0,
-      rate: options?.rate || 0.9,
-    });
+      return Speech.speak(text, {
+        language: "en",
+        pitch: options?.pitch || 1.0,
+        rate: options?.rate || 0.9,
+      });
+    } catch (error) {
+      console.error("Error speaking:", error);
+    }
   }
 
   async stopSpeaking(): Promise<void> {
-    const isSpeaking = await Speech.isSpeakingAsync();
-    if (isSpeaking) {
-      await Speech.stop();
+    try {
+      const isSpeaking = await Speech.isSpeakingAsync();
+      if (isSpeaking) await Speech.stop();
+    } catch (error) {
+      console.error("Error stopping speech:", error);
     }
   }
 
-  async processCommand(commandText: string): Promise<{ success: boolean; message?: string }> {
-    const normalizedCommand = commandText.toLowerCase().trim();
-    
-    // Check for app launch commands FIRST (before other commands)
-    if (normalizedCommand.startsWith('open ') || normalizedCommand.startsWith('launch ')) {
-      const appName = normalizedCommand.replace(/^(open|launch)\s+/, '').trim();
-      if (appName) {
-        const result = await this.handleAppLaunch(appName);
-        return result;
+  async processCommand(commandText: string): Promise<boolean> {
+    const normalizedCommand = commandText
+      .toLowerCase()
+      .replace(/[^\w\s]/g, "")
+      .trim();
+
+    // Try keyword matching first - more lenient approach
+    for (const [key, cmd] of this.commands.entries()) {
+      for (const keyword of cmd.keywords) {
+        if (normalizedCommand.includes(keyword)) {
+          await cmd.action();
+          return true;
+        }
       }
     }
-    
-    // Check for exact match
-    if (this.commands.has(normalizedCommand)) {
-      const command = this.commands.get(normalizedCommand)!;
+
+    // Try exact match
+    const command = this.commands.get(normalizedCommand);
+    if (command) {
       await command.action();
-      return { success: true, message: 'Command executed successfully' };
+      return true;
     }
 
-    // Check for partial matches
-    for (const [key, command] of this.commands.entries()) {
-      if (normalizedCommand.includes(key) || key.includes(normalizedCommand)) {
-        await command.action();
-        return { success: true, message: 'Command executed successfully' };
+    // Try fuzzy match: compare word overlap
+    let bestMatch: { command: VoiceCommand; score: number } | null = null;
+    const inputWords = normalizedCommand.split(/\s+/);
+
+    for (const [key, cmd] of this.commands.entries()) {
+      const keyWords = key.split(/\s+/);
+      const matchCount = keyWords.filter((w) => inputWords.includes(w)).length;
+      const score = matchCount / keyWords.length;
+
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = { command: cmd, score };
       }
     }
 
-    return { success: false, message: 'Unknown command. Say "help" for available commands.' };
+    if (bestMatch && bestMatch.score >= 0.5) {
+      await bestMatch.command.action();
+      return true;
+    }
+
+    return false;
   }
 
-  private async handleAppLaunch(appName: string): Promise<{ success: boolean; message: string }> {
-    if (!appName || appName.trim() === '') {
-      const msg = 'Please specify an application name';
-      await this.speak(msg);
-      return { success: false, message: msg };
-    }
+  // ---------------- RECORDING & RECOGNITION ----------------
+  async startListening(): Promise<boolean> {
+    if (this.isListening || this.processingCommand) return false;
 
-    await this.speak(`Searching for ${appName}`);
-    const apps = await appDetectionService.getInstalledApps();
-    
-    if (apps.length === 0) {
-      const msg = 'No applications detected. Please check app permissions.';
-      await this.speak(msg);
-      return { success: false, message: msg };
-    }
-
-    const searchTerm = appName.toLowerCase().trim();
-    
-    // Try exact match first
-    let matchingApp = apps.find(
-      app => app.appName.toLowerCase() === searchTerm
-    );
-
-    // Try partial match in app name
-    if (!matchingApp) {
-      matchingApp = apps.find(
-        app => app.appName.toLowerCase().includes(searchTerm)
-      );
-    }
-
-    // Try partial match in package name
-    if (!matchingApp) {
-      matchingApp = apps.find(
-        app => app.packageName.toLowerCase().includes(searchTerm)
-      );
-    }
-
-    // Try fuzzy matching (words in app name)
-    if (!matchingApp) {
-      const searchWords = searchTerm.split(/\s+/);
-      matchingApp = apps.find(app => {
-        const appNameLower = app.appName.toLowerCase();
-        return searchWords.every(word => appNameLower.includes(word));
-      });
-    }
-
-    if (matchingApp) {
-      await this.speak(`Launching ${matchingApp.appName}`);
-      const result = await appDetectionService.launchApp(matchingApp.packageName);
-      if (!result.success) {
-        const errorMsg = result.error || 'Unable to launch application';
-        const fullMsg = `Failed to launch ${matchingApp.appName}: ${errorMsg}`;
-        await this.speak(`${errorMsg}. Mission failed.`);
-        return { success: false, message: fullMsg };
-      } else {
-        const msg = `Successfully launched ${matchingApp.appName}`;
-        await this.speak('Application launched successfully');
-        return { success: true, message: msg };
+    try {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        await this.speak("Microphone permission required.");
+        this.onStatusUpdate?.("Microphone permission required.");
+        return false;
       }
-    } else {
-      // Find similar apps
-      const similar = apps.filter(app => {
-        const appNameLower = app.appName.toLowerCase();
-        return appNameLower.includes(searchTerm.substring(0, 3)) || 
-               searchTerm.includes(appNameLower.substring(0, 3));
-      }).slice(0, 3);
 
-      if (similar.length > 0) {
-        const suggestions = similar.map(app => app.appName).join(', ');
-        const msg = `Application "${appName}" not found. Did you mean: ${suggestions}?`;
-        await this.speak(`Application ${appName} not found. Did you mean: ${suggestions}?`);
-        return { success: false, message: msg };
-      } else {
-        const msg = `Application "${appName}" not found. Use "list apps" to see available applications.`;
-        await this.speak(`Application ${appName} not found. Use "list apps" to see available applications.`);
-        return { success: false, message: msg };
+      // Only set audio mode once
+      if (!this.audioModeSet) {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+        this.audioModeSet = true;
       }
+
+      this.isListening = true;
+      this.onListeningStateChange?.(true);
+
+      // Voice feedback
+      await this.speak("Listening...");
+      this.onStatusUpdate?.("Listening...");
+
+      // Start recording
+      await this.startRecording();
+
+      return true;
+    } catch (error) {
+      console.error("Error starting listening:", error);
+      this.onStatusUpdate?.("Error starting voice recognition.");
+      this.isListening = false;
+      this.onListeningStateChange?.(false);
+      return false;
     }
   }
 
-  async startListening(): Promise<string | null> {
-    if (this.isListening) {
-      return null;
+  async stopListening(): Promise<void> {
+    if (!this.isListening) return;
+
+    this.isListening = false;
+    this.onListeningStateChange?.(false);
+
+    // Clear any timers
+    if (this.recordingTimer) {
+      clearTimeout(this.recordingTimer);
+      this.recordingTimer = null;
     }
 
     try {
-      const permission = await Audio.requestPermissionsAsync();
-      if (!permission.granted) {
-        await this.speak('Microphone permission required');
-        return null;
+      if (this.recording) {
+        const status = await this.recording.getStatusAsync();
+        if (status.isRecording) {
+          await this.recording.stopAndUnloadAsync();
+        }
+        this.recording = null;
+      }
+    } catch (err) {
+      console.warn("Stop listening error:", err);
+    }
+
+    this.processingCommand = false;
+    this.onStatusUpdate?.("Stopped listening");
+  }
+
+  private async startRecording() {
+    if (!this.isListening || this.processingCommand) return;
+
+    try {
+      // Make sure we don't have an existing recording
+      if (this.recording) {
+        try {
+          const status = await this.recording.getStatusAsync();
+          if (status.isRecording) {
+            await this.recording.stopAndUnloadAsync();
+          }
+        } catch (err) {
+          console.warn("Error stopping existing recording:", err);
+        }
+        this.recording = null;
       }
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
+      // Create a new recording
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
-
       this.recording = recording;
-      this.isListening = true;
-      
-      await this.speak('Listening for commands');
-      return 'Recording started';
+
+      this.onStatusUpdate?.("Recording...");
+
+      // Set a timer to automatically stop recording after 5 seconds
+      this.recordingTimer = setTimeout(async () => {
+        await this.stopRecording();
+      }, 5000);
     } catch (err) {
-      console.error('Failed to start recording', err);
-      return null;
+      console.error("Error starting recording:", err);
+      this.onStatusUpdate?.("An error occurred while starting to record.");
+      this.isListening = false;
+      this.onListeningStateChange?.(false);
     }
   }
 
-  async stopListening(): Promise<string | null> {
-    if (!this.recording || !this.isListening) {
-      return null;
-    }
+  private async stopRecording() {
+    if (!this.recording || !this.isListening) return;
+
+    this.processingCommand = true;
+    this.onStatusUpdate?.("Processing...");
 
     try {
-      this.isListening = false;
+      // Stop the recording
       await this.recording.stopAndUnloadAsync();
       const uri = this.recording.getURI();
       this.recording = null;
-      
-      // Note: For full voice recognition, you'd need to send the audio to a service
-      // For now, we'll return the URI for manual processing
-      return uri;
-    } catch (error) {
-      console.error('Failed to stop recording', error);
+
+      if (!uri) {
+        this.onStatusUpdate?.("No audio detected.");
+      } else {
+        const fileInfo = await FileSystem.getInfoAsync(uri);
+        if (!fileInfo.exists || fileInfo.size < 2000) {
+          // Too short → likely silence
+          this.onStatusUpdate?.("No command detected.");
+        } else {
+          // Process the audio
+          const transcript = await this.recognizeAudio(uri);
+          if (!transcript || transcript.trim() === "") {
+            this.onStatusUpdate?.("Could not recognize speech.");
+          } else {
+            const success = await this.processCommand(transcript);
+            if (!success) {
+              this.onStatusUpdate?.("Command not recognized.");
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Recording error:", err);
+      this.onStatusUpdate?.("An error occurred while recording.");
+    } finally {
+      this.processingCommand = false;
+
+      // If still listening, restart the recording process
+      if (this.isListening) {
+        setTimeout(() => {
+          if (this.isListening) {
+            this.startRecording();
+          }
+        }, 1000);
+      }
+    }
+  }
+
+  private async recognizeAudio(uri: string): Promise<string | null> {
+    try {
+      // Read file as base64
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      // Convert base64 to Buffer
+      const buffer = Buffer.from(base64, "base64");
+
+      // Send audio to Deepgram
+      const response = await axios.post(
+        "https://api.deepgram.com/v1/listen?punctuate=true&language=en-US",
+        buffer,
+        {
+          headers: {
+            Authorization: `Token ${DEEPGRAM_API_KEY}`,
+            "Content-Type": "audio/wav",
+          },
+          timeout: 5000,
+        }
+      );
+
+      const transcript =
+        response.data?.results?.channels?.[0]?.alternatives?.[0]?.transcript;
+
+      return transcript || null;
+    } catch (err) {
+      console.error("Deepgram recognition error:", err);
       return null;
     }
   }
+
+  public onStatusUpdate?: (message: string) => void;
+  public onListeningStateChange?: (listening: boolean) => void;
+  public onProcessingStateChange?: (processing: boolean) => void;
 
   getAvailableCommands(): VoiceCommand[] {
     return Array.from(this.commands.values());
@@ -295,4 +382,3 @@ class VoiceAssistantService {
 }
 
 export const voiceAssistantService = VoiceAssistantService.getInstance();
-

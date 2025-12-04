@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+*.log
+*.tmp
+*.bak
+*.keystore
+android/
+ios/
+build/
+dist/
+.vscode/
+*.db
+*.apk
+*.aab

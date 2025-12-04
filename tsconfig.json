@@ -1,6 +1,9 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "strict": true,
+    "target": "es2015",           // <-- important
+    "downlevelIteration": true,   // <-- optional, safer for older targets
+    "esModuleInterop": true
   }
 }

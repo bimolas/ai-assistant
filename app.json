@@ -43,7 +43,8 @@
           "microphonePermission": "Allow YoRHa 2B to access your microphone for voice recording."
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-asset"
     ],
     "extra": {
       "eas": {
