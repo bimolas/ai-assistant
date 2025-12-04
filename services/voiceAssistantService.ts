@@ -13,6 +13,11 @@ export interface VoiceCommand {
   keywords: string[];
 }
 
+export interface CommandResult {
+  success: boolean;
+  message?: string;
+}
+
 class VoiceAssistantService {
   private static instance: VoiceAssistantService;
   private isListening = false;
@@ -133,7 +138,7 @@ class VoiceAssistantService {
     }
   }
 
-  async processCommand(commandText: string): Promise<boolean> {
+  async processCommand(commandText: string): Promise<CommandResult> {
     const normalizedCommand = commandText
       .toLowerCase()
       .replace(/[^\w\s]/g, "")
@@ -144,7 +149,7 @@ class VoiceAssistantService {
       for (const keyword of cmd.keywords) {
         if (normalizedCommand.includes(keyword)) {
           await cmd.action();
-          return true;
+          return { success: true, message: `Command executed: ${cmd.command}` };
         }
       }
     }
@@ -153,7 +158,7 @@ class VoiceAssistantService {
     const command = this.commands.get(normalizedCommand);
     if (command) {
       await command.action();
-      return true;
+      return { success: true, message: `Command executed: ${command.command}` };
     }
 
     // Try fuzzy match: compare word overlap
@@ -172,10 +177,13 @@ class VoiceAssistantService {
 
     if (bestMatch && bestMatch.score >= 0.5) {
       await bestMatch.command.action();
-      return true;
+      return {
+        success: true,
+        message: `Command executed: ${bestMatch.command.command}`,
+      };
     }
 
-    return false;
+    return { success: false, message: "Command not recognized" };
   }
 
   // ---------------- RECORDING & RECOGNITION ----------------
@@ -185,7 +193,7 @@ class VoiceAssistantService {
     try {
       const { granted } = await Audio.requestPermissionsAsync();
       if (!granted) {
-        await this.speak("Microphone permission required.");
+        await this.speak("Microphone permission required. Access denied.");
         this.onStatusUpdate?.("Microphone permission required.");
         return false;
       }
@@ -205,8 +213,8 @@ class VoiceAssistantService {
       this.onListeningStateChange?.(true);
 
       // Voice feedback
-      await this.speak("Listening...");
-      this.onStatusUpdate?.("Listening...");
+      await this.speak("Listening to your command.");
+      this.onStatusUpdate?.("Listening to your command");
 
       // Start recording
       await this.startRecording();
@@ -246,7 +254,8 @@ class VoiceAssistantService {
     }
 
     this.processingCommand = false;
-    this.onStatusUpdate?.("Stopped listening");
+    this.onStatusUpdate?.("Stop listening");
+    await this.speak("Stop listening");
   }
 
   private async startRecording() {
@@ -311,9 +320,11 @@ class VoiceAssistantService {
           if (!transcript || transcript.trim() === "") {
             this.onStatusUpdate?.("Could not recognize speech.");
           } else {
-            const success = await this.processCommand(transcript);
-            if (!success) {
-              this.onStatusUpdate?.("Command not recognized.");
+            const result = await this.processCommand(transcript);
+            if (!result.success) {
+              this.onStatusUpdate?.(
+                result.message || "Command not recognized."
+              );
             }
           }
         }

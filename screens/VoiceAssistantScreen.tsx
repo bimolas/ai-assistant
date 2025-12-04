@@ -39,8 +39,7 @@ export const VoiceAssistantScreen: React.FC = () => {
   const handleStartListening = async () => {
     const success = await voiceAssistantService.startListening();
     if (success) {
-      setIsListening(true);
-      setLastResponse("Listening... Speak your command");
+      setLastResponse("Listening to your command");
     } else {
       setLastResponse(
         "Cannot start listening. Microphone permission required."
@@ -50,8 +49,7 @@ export const VoiceAssistantScreen: React.FC = () => {
 
   const handleStopListening = async () => {
     await voiceAssistantService.stopListening();
-    setIsListening(false);
-    setLastResponse("Stopped listening");
+    setLastResponse("Stop listening. Awaiting next command.");
   };
 
   const handleProcessCommand = async () => {
@@ -75,6 +73,7 @@ export const VoiceAssistantScreen: React.FC = () => {
     setCommandText(command);
     await voiceAssistantService.processCommand(command);
   };
+
   useEffect(() => {
     // Set callbacks from service
     voiceAssistantService.onStatusUpdate = (message: string) => {
@@ -86,8 +85,7 @@ export const VoiceAssistantScreen: React.FC = () => {
     };
 
     voiceAssistantService.onProcessingStateChange = (processing: boolean) => {
-      // Optional: show a spinner or disable buttons
-      console.log("Processing:", processing);
+      setIsProcessing(processing);
     };
 
     return () => {
@@ -128,19 +126,12 @@ export const VoiceAssistantScreen: React.FC = () => {
           <Text style={styles.label}>VOICE CONTROL</Text>
           <YoRHaButton
             title={isListening ? "Stop Listening" : "Start Listening"}
-            onPress={async () => {
-              if (isListening) {
-                await voiceAssistantService.stopListening();
-                setIsListening(false);
-              } else {
-                const started = await voiceAssistantService.startListening();
-                if (started) setIsListening(true);
-              }
-            }}
+            onPress={isListening ? handleStopListening : handleStartListening}
             variant={isListening ? "outline" : "primary"}
-            style={styles.controlButton} // now this works just like the others
+            loading={isProcessing}
           />
         </YoRHaCard>
+
         {/* Manual Command Input */}
         <View style={styles.inputContainer}>
           <TextInput
@@ -155,8 +146,10 @@ export const VoiceAssistantScreen: React.FC = () => {
             title="Execute Command"
             onPress={handleProcessCommand}
             variant="primary"
+            loading={isProcessing}
           />
         </View>
+
         {/* Last Response */}
         {lastResponse && (
           <YoRHaCard style={styles.responseCard}>
@@ -164,6 +157,7 @@ export const VoiceAssistantScreen: React.FC = () => {
             <Text style={styles.responseText}>{lastResponse}</Text>
           </YoRHaCard>
         )}
+
         {/* App Launch Examples */}
         <YoRHaCard style={styles.examplesCard}>
           <Text style={styles.label}>APP LAUNCH EXAMPLES</Text>
@@ -187,6 +181,7 @@ export const VoiceAssistantScreen: React.FC = () => {
             </View>
           </View>
         </YoRHaCard>
+
         {/* Quick Commands */}
         <YoRHaCard style={styles.commandsCard}>
           <Text style={styles.label}>QUICK COMMANDS</Text>
@@ -197,12 +192,14 @@ export const VoiceAssistantScreen: React.FC = () => {
                 onPress={() => handleQuickCommand(cmd.command)}
                 style={styles.commandButton}
                 activeOpacity={0.7}
+                disabled={isProcessing}
               >
                 <Text style={styles.commandText}>{cmd.command}</Text>
               </TouchableOpacity>
             ))}
           </View>
         </YoRHaCard>
+
         {/* Available Commands List */}
         <YoRHaCard style={styles.listCard}>
           <Text style={styles.label}>AVAILABLE COMMANDS</Text>
@@ -267,9 +264,6 @@ const styles = StyleSheet.create({
   controlCard: {
     marginBottom: 16,
   },
-  controlButton: {
-    marginTop: 12,
-  },
   inputContainer: {
     marginBottom: 16,
     gap: 12,
@@ -284,21 +278,12 @@ const styles = StyleSheet.create({
     padding: 14,
     color: colors.textPrimary,
   },
-  executeButton: {
-    marginTop: 0,
-  },
   responseCard: {
     marginBottom: 16,
   },
   responseText: {
     ...typography.body,
     color: colors.textSecondary,
-    fontStyle: "italic",
-  },
-  hintText: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-    marginBottom: 12,
     fontStyle: "italic",
   },
   examplesCard: {

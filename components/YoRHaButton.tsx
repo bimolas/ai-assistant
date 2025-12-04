@@ -1,13 +1,19 @@
-import React from 'react';
-import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, ViewStyle } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { colors } from '../theme/colors';
-import { typography } from '../theme/typography';
+import React from "react";
+import {
+  TouchableOpacity,
+  Text,
+  StyleSheet,
+  ActivityIndicator,
+  ViewStyle,
+} from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { colors } from "../theme/colors";
+import { typography } from "../theme/typography";
 
 interface YoRHaButtonProps {
   title: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary' | 'outline';
+  variant?: "primary" | "secondary" | "outline";
   loading?: boolean;
   disabled?: boolean;
   style?: ViewStyle;
@@ -16,13 +22,13 @@ interface YoRHaButtonProps {
 export const YoRHaButton: React.FC<YoRHaButtonProps> = ({
   title,
   onPress,
-  variant = 'primary',
+  variant = "primary",
   loading = false,
   disabled = false,
   style,
 }) => {
-  const isPrimary = variant === 'primary';
-  const isOutline = variant === 'outline';
+  const isPrimary = variant === "primary";
+  const isOutline = variant === "outline";
 
   if (isPrimary) {
     return (
@@ -66,12 +72,12 @@ export const YoRHaButton: React.FC<YoRHaButtonProps> = ({
   }
 
   return (
-      <TouchableOpacity
-        onPress={onPress}
-        disabled={disabled || loading}
-        activeOpacity={0.8}
-        style={[styles.secondaryButton, disabled && styles.disabled, style]}
-      >
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled || loading}
+      activeOpacity={0.8}
+      style={[styles.secondaryButton, disabled && styles.disabled, style]}
+    >
       {loading ? (
         <ActivityIndicator color={colors.textPrimary} />
       ) : (
@@ -84,23 +90,27 @@ export const YoRHaButton: React.FC<YoRHaButtonProps> = ({
 const styles = StyleSheet.create({
   button: {
     borderRadius: 8,
-    overflow: 'hidden',
     shadowColor: colors.brownDark,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
+    width: "100%",
+    minHeight: 48,
+    justifyContent: "center", // ADDED: Center content
+    alignSelf: "stretch",
   },
   gradient: {
     paddingVertical: 14,
     paddingHorizontal: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     minHeight: 48,
+    borderRadius: 8,
   },
   primaryText: {
     ...typography.body,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.beigeLight,
   },
   secondaryButton: {
@@ -110,33 +120,32 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.brownMedium,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     minHeight: 48,
   },
   secondaryText: {
     ...typography.body,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.brownDark,
   },
   outlineButton: {
     paddingVertical: 14,
     paddingHorizontal: 24,
     borderRadius: 8,
-    backgroundColor: 'transparent',
+    backgroundColor: "transparent",
     borderWidth: 2,
     borderColor: colors.brownDark,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     minHeight: 48,
   },
   outlineText: {
     ...typography.body,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.brownDark,
   },
   disabled: {
-    opacity: 0.5,
+    opacity: 0.7,
   },
 });
-
