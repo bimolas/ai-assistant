@@ -28,7 +28,9 @@
         "RECORD_AUDIO",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
-        "QUERY_ALL_PACKAGES"
+        "QUERY_ALL_PACKAGES",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "web": {
@@ -40,7 +42,13 @@
         {
           "microphonePermission": "Allow YoRHa 2B to access your microphone for voice recording."
         }
-      ]
-    ]
+      ],
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4e22e0cb-e267-4ea1-ba77-e3a3a839f71d"
+      }
+    }
   }
 }
