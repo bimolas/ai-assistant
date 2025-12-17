@@ -2,7 +2,6 @@ import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
 import { appDetectionService } from "./appDetectionService";
-import axios from "axios";
 import { Buffer } from "buffer";
 import { DEEPGRAM_API_KEY } from "@env";
 
@@ -43,7 +42,6 @@ class VoiceAssistantService {
       keywords: ["open", "settings"],
       action: async () => {
         await this.speak("Opening settings");
-        // Use expo-intent-launcher if needed
       },
     });
 
@@ -140,7 +138,7 @@ class VoiceAssistantService {
 
   async processCommand(commandText: string): Promise<CommandResult> {
     const normalizedCommand = commandText
-      .toLowerCase()
+      .toLowerCase()     
       .replace(/[^\w\s]/g, "")
       .trim();
 
@@ -356,21 +354,38 @@ class VoiceAssistantService {
       // Convert base64 to Buffer
       const buffer = Buffer.from(base64, "base64");
 
-      // Send audio to Deepgram
-      const response = await axios.post(
+      // Send audio to Deepgram using fetch (works reliably in RN/Expo).
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
+      // `buffer` is a Node-style Buffer (from 'buffer'). Convert to Uint8Array
+      // Fetch accepts typed arrays as body in React Native/Expo.
+      const uint8 = Uint8Array.from(buffer as any);
+
+      const resp = await fetch(
         "https://api.deepgram.com/v1/listen?punctuate=true&language=en-US",
-        buffer,
         {
+          method: "POST",
           headers: {
             Authorization: `Token ${DEEPGRAM_API_KEY}`,
             "Content-Type": "audio/wav",
           },
-          timeout: 5000,
+          body: uint8,
+          signal: controller.signal,
         }
       );
 
+      clearTimeout(timeout);
+
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        console.error("Deepgram response error:", resp.status, text);
+        return null;
+      }
+
+      const data = await resp.json();
       const transcript =
-        response.data?.results?.channels?.[0]?.alternatives?.[0]?.transcript;
+        data?.results?.channels?.[0]?.alternatives?.[0]?.transcript;
 
       return transcript || null;
     } catch (err) {
