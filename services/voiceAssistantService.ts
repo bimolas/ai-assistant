@@ -3,7 +3,16 @@ import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
 import { appDetectionService } from "./appDetectionService";
 import { Buffer } from "buffer";
-import { DEEPGRAM_API_KEY } from "@env";
+import Constants from "expo-constants";
+
+// Read the Deepgram API key from Expo build-time config (recommended)
+// `app.config.js` should inject DEEPGRAM_API_KEY into `expo.extra` during builds.
+// Fallback to process.env for local builds.
+const DEEPGRAM_API_KEY =
+  (Constants.expoConfig &&
+    (Constants.expoConfig.extra as any)?.DEEPGRAM_API_KEY) ||
+  process.env.DEEPGRAM_API_KEY ||
+  "06169037265ad5ab922a0fb6aec0ecfc3827be3e";
 
 export interface VoiceCommand {
   command: string;
@@ -138,7 +147,7 @@ class VoiceAssistantService {
 
   async processCommand(commandText: string): Promise<CommandResult> {
     const normalizedCommand = commandText
-      .toLowerCase()     
+      .toLowerCase()
       .replace(/[^\w\s]/g, "")
       .trim();
 

@@ -2,10 +2,15 @@
 export default ({ config }) => {
   return {
     ...config,
+
+    plugins: [
+      ...(config.plugins || []),
+      "expo-audio",
+    ],
+
     extra: {
       ...(config.extra || {}),
-      // DEEPGRAM_API_KEY will be injected at build time by EAS when you
-      // configure the variable (via eas env or the Expo dashboard).
+      // Injected at build time by EAS
       DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY,
     },
   };
