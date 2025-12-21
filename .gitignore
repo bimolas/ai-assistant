@@ -85,3 +85,5 @@ yarn-error.*
 output_apks
 YoRHa2B.apk
 output_apks
+
+.env

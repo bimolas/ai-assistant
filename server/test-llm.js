@@ -13,8 +13,7 @@ try {
 }
 
 // Default model used for quick local testing. Override with LLM_MODEL env var.
-const DEFAULT_MODEL =
-  process.env.LLM_MODEL || "tngtech/deepseek-r1t2-chimera:free";
+const DEFAULT_MODEL = process.env.LLM_MODEL || "deepseek/deepseek-r1";
 
 async function main() {
   const openrouterKey = process.env.OPENROUTER_API_KEY;
