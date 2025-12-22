@@ -49,16 +49,36 @@ class LauncherModule(private val reactContext: ReactApplicationContext) :
     fun launchApp(packageName: String, activityName: String, promise: Promise) {
         Log.d(TAG, "launchApp called package=$packageName activity=$activityName")
         try {
-            val intent = Intent(Intent.ACTION_MAIN)
-            intent.addCategory(Intent.CATEGORY_LAUNCHER)
-            intent.component = ComponentName(packageName, activityName)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val pm: PackageManager = reactContext.packageManager
 
+            val intent: Intent? = if (activityName.isNullOrBlank()) {
+                // Prefer the package manager's launch intent when no activity provided
+                pm.getLaunchIntentForPackage(packageName)
+            } else {
+                Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    component = ComponentName(packageName, activityName)
+                }
+            }
+
+            if (intent == null) {
+                Log.w(TAG, "No launch intent found for package=$packageName activity=$activityName")
+                promise.reject("NO_LAUNCHER", "No launchable activity found for package: $packageName")
+                return
+            }
+
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             reactContext.startActivity(intent)
             promise.resolve(true)
         } catch (e: Exception) {
             Log.e(TAG, "launchApp error", e)
-            promise.reject("ERROR", e.message)
+            // Map common exceptions to codes for JS
+            val msg = e.message ?: "unknown"
+            when {
+                msg.contains("SecurityException", true) -> promise.reject("SECURITY_ERROR", msg)
+                msg.contains("ActivityNotFoundException", true) -> promise.reject("APP_NOT_FOUND", msg)
+                else -> promise.reject("ERROR", msg)
+            }
         }
     }
 }
