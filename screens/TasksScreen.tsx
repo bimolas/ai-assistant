@@ -1,12 +1,20 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { YoRHaCard } from '../components/YoRHaCard';
-import { YoRHaButton } from '../components/YoRHaButton';
-import { colors } from '../theme/colors';
-import { typography } from '../theme/typography';
-import { voiceService } from '../services/voiceService';
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TextInput,
+  TouchableOpacity,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import { YoRHaCard } from "../components/YoRHaCard";
+import { YoRHaButton } from "../components/YoRHaButton";
+import { colors } from "../theme/colors";
+import { typography } from "../theme/typography";
+import { voiceService } from "../services/voiceService";
+import { historyService } from "../services/historyService";
 
 interface Task {
   id: string;
@@ -16,10 +24,10 @@ interface Task {
 
 export const TasksScreen: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([
-    { id: '1', text: 'System diagnostics', completed: false },
-    { id: '2', text: 'Combat protocol review', completed: true },
+    { id: "1", text: "System diagnostics", completed: false },
+    { id: "2", text: "Combat protocol review", completed: true },
   ]);
-  const [newTask, setNewTask] = useState('');
+  const [newTask, setNewTask] = useState("");
 
   const addTask = () => {
     if (newTask.trim()) {
@@ -29,39 +37,53 @@ export const TasksScreen: React.FC = () => {
         completed: false,
       };
       setTasks([...tasks, task]);
-      setNewTask('');
+      setNewTask("");
       voiceService.speak(`Task added: ${task.text}`);
+      try {
+        historyService.add(`task:add:${task.text}`);
+      } catch {}
     }
   };
 
   const toggleTask = (id: string) => {
-    setTasks(tasks.map(task => {
-      if (task.id === id) {
-        const updated = { ...task, completed: !task.completed };
-        if (updated.completed) {
-          voiceService.speak(`Task completed: ${task.text}`);
+    setTasks(
+      tasks.map((task) => {
+        if (task.id === id) {
+          const updated = { ...task, completed: !task.completed };
+          if (updated.completed) {
+            voiceService.speak(`Task completed: ${task.text}`);
+            try {
+              historyService.add(`task:complete:${task.text}`);
+            } catch {}
+          }
+          return updated;
         }
-        return updated;
-      }
-      return task;
-    }));
+        return task;
+      })
+    );
   };
 
   const deleteTask = (id: string) => {
-    setTasks(tasks.filter(task => task.id !== id));
+    const removed = tasks.find((t) => t.id === id);
+    setTasks(tasks.filter((task) => task.id !== id));
+    if (removed) {
+      try {
+        historyService.add(`task:delete:${removed.text}`);
+      } catch {}
+    }
   };
 
   const readAllTasks = () => {
     if (tasks.length === 0) {
-      voiceService.speak('No tasks available');
+      voiceService.speak("No tasks available");
       return;
     }
-    const taskList = tasks.map((t, i) => `${i + 1}. ${t.text}`).join('. ');
+    const taskList = tasks.map((t, i) => `${i + 1}. ${t.text}`).join(". ");
     voiceService.speak(`Current tasks: ${taskList}`);
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.spacer} />
 
@@ -74,11 +96,7 @@ export const TasksScreen: React.FC = () => {
             onChangeText={setNewTask}
             onSubmitEditing={addTask}
           />
-          <YoRHaButton
-            title="Add"
-            onPress={addTask}
-            variant="primary"
-          />
+          <YoRHaButton title="Add" onPress={addTask} variant="primary" />
         </View>
 
         <YoRHaButton
@@ -93,7 +111,7 @@ export const TasksScreen: React.FC = () => {
             <Text style={styles.emptyText}>No tasks assigned</Text>
           </YoRHaCard>
         ) : (
-          tasks.map(task => (
+          tasks.map((task) => (
             <YoRHaCard key={task.id} style={styles.taskCard}>
               <View style={styles.taskRow}>
                 <TouchableOpacity
@@ -101,7 +119,11 @@ export const TasksScreen: React.FC = () => {
                   style={styles.checkbox}
                 >
                   {task.completed && (
-                    <Ionicons name="checkmark" size={20} color={colors.success} />
+                    <Ionicons
+                      name="checkmark"
+                      size={20}
+                      color={colors.success}
+                    />
                   )}
                 </TouchableOpacity>
                 <Text
@@ -159,8 +181,8 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   taskRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
   },
   checkbox: {
     width: 24,
@@ -169,8 +191,8 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: colors.accent,
     marginRight: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
   },
   taskText: {
     ...typography.body,
@@ -178,14 +200,14 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   taskTextCompleted: {
-    textDecorationLine: 'line-through',
+    textDecorationLine: "line-through",
     color: colors.textTertiary,
   },
   deleteButton: {
     padding: 4,
   },
   emptyCard: {
-    alignItems: 'center',
+    alignItems: "center",
     padding: 32,
   },
   emptyText: {
@@ -193,4 +215,3 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
   },
 });
-

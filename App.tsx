@@ -13,6 +13,7 @@ import { PodNavigation } from "./components/PodNavigation";
 import { BootSequence } from "./components/BootSequence";
 import { voiceService } from "./services/voiceService";
 import { voiceAssistantService } from "./services/voiceAssistantService";
+import { HistoryScreen } from "./screens/HistoryScreen";
 
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState("Home");
@@ -30,10 +31,13 @@ export default function App() {
         return <VoiceAssistantScreen />;
       case "Apps":
         return <AppsScreen />;
+      case "History":
+        return <HistoryScreen />;
       case "Profile":
         return <ProfileScreen />;
       default:
         return <HomeScreen />;
+      
     }
   };
 

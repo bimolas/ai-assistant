@@ -1,9 +1,11 @@
 import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
+import { Alert, Linking } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import { appDetectionService } from "./appDetectionService";
 import { Buffer } from "buffer";
 import Constants from "expo-constants";
+import { historyService } from "./historyService";
 import { queryLLM } from "./llmService";
 
 export interface VoiceCommand {
@@ -52,10 +54,10 @@ class VoiceAssistantService {
   };
 
   // Minimum confidence threshold for automatic recognition acceptance
-  private MIN_RECOGNITION_CONFIDENCE = 0.6;
+  private MIN_RECOGNITION_CONFIDENCE = 0.5;
 
   // Minimum number of words to accept short transcriptions without a confidence check
-  private MIN_WORDS_FOR_LOW_CONFIDENCE = 2;
+  private MIN_WORDS_FOR_LOW_CONFIDENCE = 3;
 
   // Resolve Deepgram API key from env or Expo config; fallback placeholder
   private DEEPGRAM_API_KEY: string =
@@ -143,14 +145,20 @@ class VoiceAssistantService {
       },
     });
 
-    // Explicit command to open the AppsScreen UI where apps are listed
+    // Also register a shorter command 'app list' and accept 'application list'
+    // for convenience and consistency with user phrasing.
     this.registerCommand({
-      command: "open app list",
-      description: "Open the apps list screen",
-      keywords: ["open", "apps", "app list", "show apps", "open apps"],
+      command: "app list",
+      description: "Open the apps list screen (short)",
+      keywords: [
+        "app list",
+        "apps",
+        "list apps",
+        "show apps",
+        "application list",
+      ],
       action: async () => {
         try {
-          // Navigate if the app sets onNavigate; otherwise just announce
           if (this.onNavigate) {
             try {
               this.onNavigate("Apps");
@@ -166,24 +174,24 @@ class VoiceAssistantService {
       },
     });
 
-    // Also register a shorter command 'app list' for convenience
+    // Add an explicit 'open camera' command to improve recognition of camera
+    // requests (some devices / recognizers struggle with 'camera' matching).
     this.registerCommand({
-      command: "app list",
-      description: "Open the apps list screen (short)",
-      keywords: ["app list", "apps", "list apps", "show apps"],
+      command: "open camera",
+      description: "Opens the device camera",
+      keywords: ["open camera", "camera", "cam"],
       action: async () => {
         try {
-          if (this.onNavigate) {
-            try {
-              this.onNavigate("Apps");
-            } catch (e) {
-              console.warn("onNavigate threw:", e);
-            }
+          this.onStatusUpdate?.("Opening camera");
+          const res = await appDetectionService.launchApp("com.android.camera");
+          if (res.success) {
+            await this.speak("Opening camera");
+          } else {
+            await this.speak("Unable to open camera");
           }
-          await this.speak("Opening application list");
         } catch (err) {
-          console.error("Error opening app list:", err);
-          await this.speak("Unable to open application list");
+          console.warn("Error opening camera:", err);
+          await this.speak("Unable to open camera");
         }
       },
     });
@@ -321,6 +329,13 @@ class VoiceAssistantService {
         // Update UI immediately, then speak asynchronously to reduce perceived latency
         this.onStatusUpdate?.(llmReply);
         this.speak(llmReply);
+        try {
+          // Record the user's question and the assistant response together
+          await historyService.addWithResponse(
+            userQuery || commandText,
+            llmReply
+          );
+        } catch {}
         return { success: true, message: "LLM response delivered" };
       } catch (err) {
         console.error("LLM trigger error:", err);
@@ -344,6 +359,9 @@ class VoiceAssistantService {
     if (this.commands.has(normalizedCommand)) {
       const command = this.commands.get(normalizedCommand)!;
       await command.action();
+      try {
+        await historyService.add(command.command);
+      } catch {}
       return { success: true, message: "Command executed successfully" };
     }
 
@@ -351,6 +369,9 @@ class VoiceAssistantService {
     for (const [key, command] of this.commands.entries()) {
       if (normalizedCommand.includes(key) || key.includes(normalizedCommand)) {
         await command.action();
+        try {
+          await historyService.add(command.command);
+        } catch {}
         return { success: true, message: "Command executed successfully" };
       }
     }
@@ -360,6 +381,9 @@ class VoiceAssistantService {
       for (const keyword of cmd.keywords) {
         if (normalizedCommand.includes(keyword)) {
           await cmd.action();
+          try {
+            await historyService.add(cmd.command);
+          } catch {}
           return { success: true, message: `Command executed: ${cmd.command}` };
         }
       }
@@ -388,6 +412,9 @@ class VoiceAssistantService {
 
     if (bestMatch && bestMatch.score >= 0.5) {
       await bestMatch.command.action();
+      try {
+        await historyService.add(bestMatch.command.command);
+      } catch {}
       return {
         success: true,
         message: `Command executed: ${bestMatch.command.command}`,
@@ -411,6 +438,9 @@ class VoiceAssistantService {
             await this.speak(`Unable to open ${appQuery}`);
             return { success: false, message: launch.error || "Launch failed" };
           }
+          try {
+            await historyService.add(`open ${appQuery}`);
+          } catch {}
           return { success: true, message: `Launched ${appQuery}` };
         }
 
@@ -452,6 +482,10 @@ class VoiceAssistantService {
       // Otherwise update UI immediately then speak asynchronously
       this.onStatusUpdate?.(llmReply);
       this.speak(llmReply);
+      try {
+        // record the user's original command and the assistant reply
+        await historyService.addWithResponse(commandText, llmReply);
+      } catch {}
       return { success: true, message: "LLM response delivered" };
     } catch (err) {
       console.error("LLM fallback error:", err);
@@ -459,9 +493,7 @@ class VoiceAssistantService {
     }
   }
 
-  private async handleAppLaunch(
-    appName: string
-  ): Promise<{ success: boolean; message: string }> {
+  private async handleAppLaunch(appName: string): Promise<any> {
     if (!appName || appName.trim() === "") {
       const msg = "Please specify an application name";
       this.onStatusUpdate?.(msg);
@@ -487,7 +519,12 @@ class VoiceAssistantService {
       this.onStatusUpdate?.(`Opening ${appName}`);
       this.speak(`Opening ${appName}`);
       const res = await appDetectionService.launchApp(pkg);
-      if (res.success) return { success: true, message: `Launched ${appName}` };
+      if (res.success) {
+        try {
+          await historyService.add(`open ${appName}`);
+        } catch {}
+        return { success: true, message: `Launched ${appName}` };
+      }
       // otherwise continue to try searching installed apps
     }
 
@@ -498,8 +535,12 @@ class VoiceAssistantService {
         this.onStatusUpdate?.(`Opening ${appName}`);
         this.speak(`Opening ${appName}`);
         const res = await appDetectionService.launchApp(pkg);
-        if (res.success)
+        if (res.success) {
+          try {
+            await historyService.add(`open ${appName}`);
+          } catch {}
           return { success: true, message: `Launched ${appName}` };
+        }
       }
     }
 
@@ -552,6 +593,9 @@ class VoiceAssistantService {
           return { success: false, message: fullMsg };
         } else {
           const msg = `Successfully launched ${matchingApp.appName}`;
+          try {
+            await historyService.add(`open ${matchingApp.appName}`);
+          } catch {}
           return { success: true, message: msg };
         }
       }
@@ -570,6 +614,9 @@ class VoiceAssistantService {
           fuzzyApp.packageName
         );
         if (launchRes.success) {
+          try {
+            await historyService.add(`open ${fuzzyApp.appName}`);
+          } catch {}
           return { success: true, message: `Launched ${fuzzyApp.appName}` };
         } else {
           await this.speak(`Unable to open ${fuzzyApp.appName}`);
@@ -611,18 +658,29 @@ class VoiceAssistantService {
   }
 
   // ---------------- RECORDING & RECOGNITION ----------------
+  /**
+   * Start listening for a voice command.
+   * Ensures permissions, sets audio mode, and starts recording.
+   * Robust to errors and always keeps state flags consistent.
+   */
   async startListening(): Promise<boolean> {
     if (this.isListening || this.processingCommand) return false;
-
     try {
-      const { granted } = await Audio.requestPermissionsAsync();
+      const perm = await Audio.requestPermissionsAsync();
+      const granted =
+        (perm as any).granted ?? (perm as any).status === "granted";
       if (!granted) {
-        await this.speak("Microphone permission required. Access denied.");
+        await this.speak(
+          "Microphone permission required. Please enable microphone access in app settings."
+        );
         this.onStatusUpdate?.("Microphone permission required.");
+        this.isListening = false;
+        this.onListeningStateChange?.(false);
+        // Offer user a quick way to open app settings so they can re-enable the mic
+       
+        
         return false;
       }
-
-      // Only set audio mode once
       if (!this.audioModeSet) {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: true,
@@ -632,131 +690,135 @@ class VoiceAssistantService {
         });
         this.audioModeSet = true;
       }
-
       this.isListening = true;
       this.onListeningStateChange?.(true);
-
-      // Voice feedback
       await this.speak("Listening to your command.");
       this.onStatusUpdate?.("Listening to your command");
-
-      // Start recording
       await this.startRecording();
-
       return true;
     } catch (error) {
       console.error("Error starting listening:", error);
-      this.onStatusUpdate?.("Error starting voice recognition.");
       this.isListening = false;
       this.onListeningStateChange?.(false);
+      this.onStatusUpdate?.("Error starting voice recognition.");
       return false;
     }
   }
 
+  /**
+   * Stop listening and clean up recording state.
+   * Always clears timers and recording references, even on error.
+   */
   async stopListening(): Promise<void> {
     if (!this.isListening) return;
-
     this.isListening = false;
     this.onListeningStateChange?.(false);
-
-    // Clear any timers
     if (this.recordingTimer) {
       clearTimeout(this.recordingTimer);
       this.recordingTimer = null;
     }
-
     try {
       if (this.recording) {
         const status = await this.recording.getStatusAsync();
         if (status.isRecording) {
           await this.recording.stopAndUnloadAsync();
         }
-        this.recording = null;
       }
     } catch (err) {
       console.warn("Stop listening error:", err);
+    } finally {
+      this.recording = null;
+      this.processingCommand = false;
+      this.onStatusUpdate?.("Stop listening");
+      await this.speak("Stop listening");
     }
-
-    this.processingCommand = false;
-    this.onStatusUpdate?.("Stop listening");
-    await this.speak("Stop listening");
   }
 
+  /**
+   * Start a new audio recording session.
+   * Ensures no stale recording, waits for TTS to finish, and sets up timer.
+   */
   private async startRecording() {
     if (!this.isListening || this.processingCommand) return;
-
-    // If we're currently speaking (or prevented), wait until speaking finishes
     if (this.preventRecordingDuringSpeak) {
-      // wait up to 5s for speak to finish
       const start = Date.now();
       while (this.preventRecordingDuringSpeak && Date.now() - start < 5000) {
-        // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, 150));
       }
-      if (this.preventRecordingDuringSpeak) return; // still speaking — skip starting
+      if (this.preventRecordingDuringSpeak) return;
     }
-
-    // Avoid concurrent prepare/createAsync calls which Expo AV rejects
     if (this.preparingRecording) return;
     this.preparingRecording = true;
-
     try {
-      // Make sure we don't have an existing recording
-      if (this.recording) {
-        try {
-          const status = await this.recording.getStatusAsync();
-          if (status.isRecording) {
-            await this.recording.stopAndUnloadAsync();
-          }
-        } catch (err) {
-          console.warn("Error stopping existing recording:", err);
-        }
-        this.recording = null;
-      }
-
-      // Create a new recording
+      await this.cleanupRecording();
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
       this.recording = recording;
-
       this.onStatusUpdate?.("Recording...");
-
-      // Set a timer to automatically stop recording after 5 seconds
       this.recordingTimer = setTimeout(async () => {
         await this.stopRecording();
       }, 5000);
     } catch (err) {
       console.error("Error starting recording:", err);
-      this.onStatusUpdate?.("An error occurred while starting to record.");
       this.isListening = false;
       this.onListeningStateChange?.(false);
+      this.onStatusUpdate?.("An error occurred while starting to record.");
     } finally {
       this.preparingRecording = false;
     }
   }
 
+  /**
+   * Clean up any existing recording, stopping and unloading if needed.
+   * Always clears the recording reference.
+   */
+  private async cleanupRecording() {
+    if (this.recording) {
+      try {
+        const status = await this.recording.getStatusAsync();
+        if (status.isRecording) {
+          await this.recording.stopAndUnloadAsync();
+        }
+      } catch (err) {
+        console.warn("Error stopping existing recording:", err);
+      } finally {
+        this.recording = null;
+      }
+    }
+  }
+
+  /**
+   * Stop the current recording and process the audio.
+   * Handles errors gracefully and always clears recording reference.
+   */
   private async stopRecording() {
     if (!this.recording || !this.isListening) return;
-
     this.processingCommand = true;
     this.onStatusUpdate?.("Processing...");
-
+    let uri: string | null = null;
     try {
-      // Stop the recording
-      await this.recording.stopAndUnloadAsync();
-      const uri = this.recording.getURI();
+      try {
+        await this.recording.stopAndUnloadAsync();
+      } catch (stopErr: any) {
+        console.warn("Error stopping existing recording (ignored):", stopErr);
+      }
+      uri = this.recording.getURI();
+    } catch (err) {
+      console.error("Recording error:", err);
+      this.onStatusUpdate?.("An error occurred while recording.");
+    } finally {
       this.recording = null;
-
-      if (!uri) {
-        this.onStatusUpdate?.("No audio detected.");
-      } else {
+    }
+    // Process the audio if we have a valid URI
+    if (!uri) {
+      this.onStatusUpdate?.("No audio detected.");
+    } else {
+      try {
         const fileInfo = await FileSystem.getInfoAsync(uri);
         if (!fileInfo.exists || fileInfo.size < 2000) {
-          // Too short → likely silence
           this.onStatusUpdate?.("No command detected.");
         } else {
-          // Process the audio
           const transcript = await this.recognizeAudio(uri);
           if (!transcript || transcript.trim() === "") {
             this.onStatusUpdate?.("Could not recognize speech.");
@@ -769,21 +831,19 @@ class VoiceAssistantService {
             }
           }
         }
+      } catch (err) {
+        console.error("Audio file error:", err);
+        this.onStatusUpdate?.("Audio file error.");
       }
-    } catch (err) {
-      console.error("Recording error:", err);
-      this.onStatusUpdate?.("An error occurred while recording.");
-    } finally {
-      this.processingCommand = false;
-
-      // If still listening, restart the recording process
-      if (this.isListening) {
-        setTimeout(() => {
-          if (this.isListening) {
-            this.startRecording();
-          }
-        }, 1000);
-      }
+    }
+    this.processingCommand = false;
+    // If still listening, restart the recording process
+    if (this.isListening) {
+      setTimeout(() => {
+        if (this.isListening) {
+          this.startRecording();
+        }
+      }, 1000);
     }
   }
 
@@ -799,11 +859,49 @@ class VoiceAssistantService {
 
       // Send audio to Deepgram using fetch (works reliably in RN/Expo).
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
+      const timeout = setTimeout(() => controller.abort(), 20000);
 
       // `buffer` is a Node-style Buffer (from 'buffer'). Convert to Uint8Array
       // Fetch accepts typed arrays as body in React Native/Expo.
       const uint8 = Uint8Array.from(buffer as any);
+
+      // Helper: pick best transcript from alternatives using confidence
+      // and favor slightly longer transcripts when confidence is close.
+      const selectTranscript = (
+        alternatives: any[],
+        minConf: number,
+        minWords: number
+      ) => {
+        if (!alternatives || alternatives.length === 0) return null;
+        let best: any = alternatives[0];
+        let bestScore = -Infinity;
+        for (const alt of alternatives) {
+          const t = (alt.transcript || "").trim();
+          const words = t ? t.split(/\s+/).filter(Boolean).length : 0;
+          const conf = typeof alt.confidence === "number" ? alt.confidence : 0;
+          // Score favors confidence first, but prefers longer transcripts when
+          // confidences are close to avoid very short low-info picks.
+          const score = conf * (1 + Math.log(1 + words) / 5) + words * 0.001;
+          if (score > bestScore) {
+            bestScore = score;
+            best = alt;
+          }
+        }
+        const transcript = best.transcript || null;
+        if (!transcript) return null;
+        const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length;
+        const confVal =
+          typeof best.confidence === "number" ? best.confidence : 0;
+        if (confVal < minConf && wordCount < minWords) {
+          // low confidence and very short -> reject
+          console.warn("Low-confidence short recognition ignored", {
+            transcript,
+            conf: confVal,
+          });
+          return null;
+        }
+        return transcript && transcript.trim() ? transcript : null;
+      };
 
       const resp = await fetch(
         "https://api.deepgram.com/v1/listen?punctuate=true&language=en-US",
@@ -820,50 +918,48 @@ class VoiceAssistantService {
 
       clearTimeout(timeout);
 
+      // Retry once when the request fails (network flakiness)
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
-        console.error("Deepgram response error:", resp.status, text);
-        return null;
+        console.warn(
+          "Deepgram response error, retrying once:",
+          resp.status,
+          text
+        );
+        // retry once
+        const resp2 = await fetch(
+          "https://api.deepgram.com/v1/listen?punctuate=true&language=en-US",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Token ${this.DEEPGRAM_API_KEY}`,
+              "Content-Type": "audio/wav",
+            },
+            body: uint8,
+            signal: controller.signal,
+          }
+        ).catch(() => null as any);
+        if (!resp2 || !resp2.ok) {
+          const t2 = resp2 ? await resp2.text().catch(() => "") : "";
+          console.error("Deepgram retry failed:", resp2?.status, t2);
+          return null;
+        }
+        const data2 = await resp2.json().catch(() => null);
+        const alternatives2 = data2?.results?.channels?.[0]?.alternatives || [];
+        return selectTranscript(
+          alternatives2,
+          this.MIN_RECOGNITION_CONFIDENCE,
+          this.MIN_WORDS_FOR_LOW_CONFIDENCE
+        );
       }
 
       const data = await resp.json();
       const alternatives = data?.results?.channels?.[0]?.alternatives || [];
-      // Prefer the alternative with highest confidence when available, otherwise the first non-empty
-      let transcript: string | null = null;
-      if (alternatives.length > 0) {
-        let best = alternatives[0];
-        for (const alt of alternatives) {
-          if (
-            alt.confidence &&
-            best.confidence &&
-            alt.confidence > best.confidence
-          ) {
-            best = alt;
-          }
-        }
-        transcript = best.transcript || null;
-
-        // Basic confidence filtering: if the transcript is very short and
-        // confidence is low, ignore it to avoid false positives (e.g. "list apps")
-        if (transcript) {
-          const words = transcript.trim().split(/\s+/).filter(Boolean).length;
-          const conf =
-            typeof best.confidence === "number" ? best.confidence : 0;
-          if (
-            conf < this.MIN_RECOGNITION_CONFIDENCE &&
-            words < this.MIN_WORDS_FOR_LOW_CONFIDENCE
-          ) {
-            // treat as not recognized
-            console.warn("Low-confidence short recognition ignored", {
-              transcript,
-              conf,
-            });
-            return null;
-          }
-        }
-      }
-
-      return transcript && transcript.trim() ? transcript : null;
+      return selectTranscript(
+        alternatives,
+        this.MIN_RECOGNITION_CONFIDENCE,
+        this.MIN_WORDS_FOR_LOW_CONFIDENCE
+      );
     } catch (err) {
       console.error("Deepgram recognition error:", err);
       return null;
@@ -925,6 +1021,45 @@ class VoiceAssistantService {
   public onProcessingStateChange?: (processing: boolean) => void;
   // Optional navigation callback (App can set this to allow opening screens)
   public onNavigate?: (route: string) => void;
+
+  // Routes where continuous listening is allowed. Callers can override.
+  public allowedListeningRoutes: string[] = [
+    "VoiceAssistant",
+    "Voice",
+    "VoiceScreen",
+  ];
+
+  /**
+   * Notify the assistant that the app navigated to a new route.
+   * If the new route is not in `allowedListeningRoutes` the assistant
+   * will stop listening to avoid background recording conflicts.
+   */
+  public notifyNavigation(route: string) {
+    try {
+      const normalized = (route || "").toString();
+      if (
+        !this.allowedListeningRoutes.includes(normalized) &&
+        this.isListening
+      ) {
+        // Stop listening when leaving the voice UI to avoid broken recordings
+        // and audio focus conflicts.
+        // We don't await here to avoid blocking the caller.
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        this.stopListening();
+      }
+    } catch (e) {
+      console.warn("notifyNavigation error:", e);
+    }
+  }
+
+  /**
+   * Replace the set of routes where continuous listening is allowed.
+   */
+  public setAllowedListeningRoutes(routes: string[]) {
+    this.allowedListeningRoutes = Array.isArray(routes)
+      ? routes
+      : this.allowedListeningRoutes;
+  }
 
   getAvailableCommands(): VoiceCommand[] {
     return Array.from(this.commands.values());
