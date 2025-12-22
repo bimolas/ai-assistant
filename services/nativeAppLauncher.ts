@@ -1,61 +1,80 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules, Platform } from "react-native";
 
-const { AppLauncherModule } = NativeModules;
-
-interface AppLauncherModuleInterface {
-  launchApp(packageName: string): Promise<boolean>;
-}
+// The native module we added in Kotlin is named "LauncherModule" (see getName()).
+const { LauncherModule, AppLauncherModule } = NativeModules as any;
 
 export const nativeAppLauncher = {
-  async launchApp(packageName: string): Promise<{ success: boolean; error?: string }> {
-    if (Platform.OS !== 'android') {
-      return { success: false, error: 'Native app launcher is only available on Android.' };
-    }
+  /**
+   * Attempt to launch an app using the native LauncherModule.
+   * If an activityName is provided, it will be passed to the native side.
+   */
+  async launchApp(
+    packageName: string,
+    activityName?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    console.log("LauncherModule:", NativeModules.LauncherModule);
 
-    if (!AppLauncherModule) {
-      console.warn('AppLauncherModule not found - native module not loaded. Rebuild required.');
-      return { 
-        success: false, 
-        error: 'Native module not loaded. You MUST rebuild the app: npx expo run:android (not just reload)' 
+    if (Platform.OS !== "android") {
+      return {
+        success: false,
+        error: "Native app launcher is only available on Android.",
       };
     }
-    
-    console.log('Using native AppLauncherModule for:', packageName);
+
+    const nativeModule = LauncherModule || AppLauncherModule || null;
+    if (!nativeModule) {
+      console.warn(
+        "LauncherModule not found - native module not loaded. Rebuild required."
+      );
+      return {
+        success: false,
+        error:
+          "Native module not loaded. You MUST rebuild the app: npx expo run:android (not just reload)",
+      };
+    }
 
     try {
-      await (AppLauncherModule as AppLauncherModuleInterface).launchApp(packageName);
+      // The Kotlin implementation expects (packageName, activityName, Promise)
+      // When activityName is undefined, pass empty string to keep signature consistent.
+      const activityArg = activityName || "";
+      // Many RN bridge implementations return a Promise when the native method uses a Promise parameter.
+      await nativeModule.launchApp(packageName, activityArg);
       return { success: true };
     } catch (error: any) {
-      const errorCode = error?.code || '';
-      const errorMessage = error?.message || String(error);
-      
-      // Check error code first (more reliable)
-      if (errorCode === 'SECURITY_ERROR' || errorMessage.includes('SECURITY_ERROR') || errorMessage.includes('SecurityException')) {
-        return { 
-          success: false, 
-          error: 'This app is protected by Android and cannot be launched externally. This is a security restriction, not a bug.' 
+      const errorCode = error?.code || "";
+      const errorMessage = error?.message || String(error || "");
+
+      if (
+        errorCode === "SECURITY_ERROR" ||
+        errorMessage.includes("SecurityException") ||
+        errorMessage.includes("SECURITY_ERROR")
+      ) {
+        return {
+          success: false,
+          error:
+            "This app is protected by Android and cannot be launched externally. This is a security restriction.",
         };
       }
-      
-      if (errorCode === 'APP_NOT_FOUND' || errorMessage.includes('APP_NOT_FOUND')) {
-        return { 
-          success: false, 
-          error: 'Application not found.' 
+
+      if (
+        errorCode === "APP_NOT_FOUND" ||
+        errorMessage.includes("APP_NOT_FOUND") ||
+        errorMessage.includes("ActivityNotFoundException")
+      ) {
+        return { success: false, error: "Application or activity not found." };
+      }
+
+      if (errorCode === "NO_LAUNCHER" || errorMessage.includes("NO_LAUNCHER")) {
+        return {
+          success: false,
+          error: "This app does not have a launchable activity.",
         };
       }
-      
-      if (errorCode === 'NO_LAUNCHER' || errorMessage.includes('NO_LAUNCHER')) {
-        return { 
-          success: false, 
-          error: 'This app does not have a launchable activity.' 
-        };
-      }
-      
-      return { 
-        success: false, 
-        error: errorMessage || 'Failed to launch application.' 
+
+      return {
+        success: false,
+        error: errorMessage || "Failed to launch application.",
       };
     }
   },
 };
-

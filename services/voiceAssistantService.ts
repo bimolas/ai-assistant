@@ -41,6 +41,18 @@ class VoiceAssistantService {
     gmail: "com.google.android.gm",
   };
 
+  // Minimum confidence threshold for automatic recognition acceptance
+  private MIN_RECOGNITION_CONFIDENCE = 0.6;
+
+  // Minimum number of words to accept short transcriptions without a confidence check
+  private MIN_WORDS_FOR_LOW_CONFIDENCE = 2;
+
+  // Resolve Deepgram API key from env or Expo config; fallback placeholder
+  private DEEPGRAM_API_KEY: string =
+    process.env.DEEPGRAM_API_KEY ||
+    (Constants?.expoConfig?.extra as any)?.DEEPGRAM_API_KEY ||
+    "06169037265ad5ab922a0fb6aec0ecfc3827be3e";
+
   static getInstance(): VoiceAssistantService {
     if (!VoiceAssistantService.instance) {
       VoiceAssistantService.instance = new VoiceAssistantService();
@@ -229,11 +241,14 @@ class VoiceAssistantService {
 
         if (!llmReply) {
           const msg = "Unable to get a response from the assistant.";
+          this.onStatusUpdate?.(msg);
           await this.speak(msg);
           return { success: false, message: msg };
         }
 
-        await this.speak(llmReply);
+        // Update UI immediately, then speak asynchronously to reduce perceived latency
+        this.onStatusUpdate?.(llmReply);
+        this.speak(llmReply);
         return { success: true, message: "LLM response delivered" };
       } catch (err) {
         console.error("LLM trigger error:", err);
@@ -317,7 +332,8 @@ class VoiceAssistantService {
         const aliasKey = appQuery.toLowerCase().replace(/\s+/g, "");
         if (this.APP_ALIASES[aliasKey]) {
           const pkg = this.APP_ALIASES[aliasKey];
-          await this.speak(`Opening ${appQuery}`);
+          this.onStatusUpdate?.(`Opening ${appQuery}`);
+          this.speak(`Opening ${appQuery}`);
           const launch = await appDetectionService.launchApp(pkg);
           if (!launch.success) {
             await this.speak(`Unable to open ${appQuery}`);
@@ -361,8 +377,9 @@ class VoiceAssistantService {
         return res;
       }
 
-      // Otherwise speak the LLM reply (short response) and don't immediately restart recording until speech ends
-      await this.speak(llmReply);
+      // Otherwise update UI immediately then speak asynchronously
+      this.onStatusUpdate?.(llmReply);
+      this.speak(llmReply);
       return { success: true, message: "LLM response delivered" };
     } catch (err) {
       console.error("LLM fallback error:", err);
@@ -375,11 +392,12 @@ class VoiceAssistantService {
   ): Promise<{ success: boolean; message: string }> {
     if (!appName || appName.trim() === "") {
       const msg = "Please specify an application name";
+      this.onStatusUpdate?.(msg);
       await this.speak(msg);
       return { success: false, message: msg };
     }
-
-    await this.speak(`Searching for ${appName}`);
+    this.onStatusUpdate?.(`Searching for ${appName}`);
+    // Fire an acknowledgement TTS but don't block UI updates
     const apps = await appDetectionService.getInstalledApps();
 
     if (apps.length === 0) {
@@ -420,7 +438,8 @@ class VoiceAssistantService {
 
     if (matchingApp) {
       // Speak immediately to acknowledge the request, then attempt launch.
-      await this.speak(`Opening ${matchingApp.appName}`);
+      this.onStatusUpdate?.(`Opening ${matchingApp.appName}`);
+      this.speak(`Opening ${matchingApp.appName}`);
       const result = await appDetectionService.launchApp(
         matchingApp.packageName
       );
@@ -435,7 +454,27 @@ class VoiceAssistantService {
         return { success: true, message: msg };
       }
     } else {
-      // Find similar apps
+      // Try a fuzzy best-match
+      const { app: fuzzyApp, score } = this.findBestFuzzyApp(apps, searchTerm);
+      if (fuzzyApp && score >= 0.6) {
+        // Accept fuzzy match
+        this.onStatusUpdate?.(`Opening ${fuzzyApp.appName}`);
+        this.speak(`Opening ${fuzzyApp.appName}`);
+        const launchRes = await appDetectionService.launchApp(
+          fuzzyApp.packageName
+        );
+        if (launchRes.success) {
+          return { success: true, message: `Launched ${fuzzyApp.appName}` };
+        } else {
+          await this.speak(`Unable to open ${fuzzyApp.appName}`);
+          return {
+            success: false,
+            message: launchRes.error || "Launch failed",
+          };
+        }
+      }
+
+      // Provide suggestions based on simple substring matches for clarity
       const similar = apps
         .filter((app) => {
           const appNameLower = app.appName.toLowerCase();
@@ -449,12 +488,14 @@ class VoiceAssistantService {
       if (similar.length > 0) {
         const suggestions = similar.map((app) => app.appName).join(", ");
         const msg = `Application "${appName}" not found. Did you mean: ${suggestions}?`;
+        this.onStatusUpdate?.(msg);
         await this.speak(
           `Application ${appName} not found. Did you mean: ${suggestions}?`
         );
         return { success: false, message: msg };
       } else {
         const msg = `Application "${appName}" not found. Use "list apps" to see available applications.`;
+        this.onStatusUpdate?.(msg);
         await this.speak(
           `Application ${appName} not found. Use "list apps" to see available applications.`
         );
@@ -657,7 +698,7 @@ class VoiceAssistantService {
         {
           method: "POST",
           headers: {
-            Authorization: `Token ${process.env.DEEPGRAM_API_KEY || ""}`,
+            Authorization: `Token ${this.DEEPGRAM_API_KEY}`,
             "Content-Type": "audio/wav",
           },
           body: uint8,
@@ -689,6 +730,25 @@ class VoiceAssistantService {
           }
         }
         transcript = best.transcript || null;
+
+        // Basic confidence filtering: if the transcript is very short and
+        // confidence is low, ignore it to avoid false positives (e.g. "list apps")
+        if (transcript) {
+          const words = transcript.trim().split(/\s+/).filter(Boolean).length;
+          const conf =
+            typeof best.confidence === "number" ? best.confidence : 0;
+          if (
+            conf < this.MIN_RECOGNITION_CONFIDENCE &&
+            words < this.MIN_WORDS_FOR_LOW_CONFIDENCE
+          ) {
+            // treat as not recognized
+            console.warn("Low-confidence short recognition ignored", {
+              transcript,
+              conf,
+            });
+            return null;
+          }
+        }
       }
 
       return transcript && transcript.trim() ? transcript : null;
@@ -696,6 +756,56 @@ class VoiceAssistantService {
       console.error("Deepgram recognition error:", err);
       return null;
     }
+  }
+
+  // ----------------- FUZZY MATCH HELPERS -----------------
+  private levenshtein(a: string, b: string): number {
+    const al = a.length;
+    const bl = b.length;
+    if (al === 0) return bl;
+    if (bl === 0) return al;
+    const matrix: number[][] = Array.from({ length: al + 1 }, () =>
+      Array(bl + 1).fill(0)
+    );
+    for (let i = 0; i <= al; i++) matrix[i][0] = i;
+    for (let j = 0; j <= bl; j++) matrix[0][j] = j;
+    for (let i = 1; i <= al; i++) {
+      for (let j = 1; j <= bl; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j - 1] + cost
+        );
+      }
+    }
+    return matrix[al][bl];
+  }
+
+  private findBestFuzzyApp(
+    apps: { appName: string; packageName: string }[],
+    query: string
+  ): { app: any | null; score: number } {
+    const q = query.toLowerCase().trim();
+    let best: any | null = null;
+    let bestScore = 0;
+    for (const app of apps) {
+      const name = app.appName.toLowerCase();
+      const pkg = app.packageName.toLowerCase();
+      const maxLen = Math.max(name.length, q.length, 1);
+      const d = this.levenshtein(name, q);
+      const scoreName = 1 - d / maxLen; // normalized similarity
+
+      // also check prefix similarity for short queries
+      const prefixScore = name.startsWith(q) || pkg.startsWith(q) ? 1 : 0;
+
+      const score = Math.max(scoreName, prefixScore);
+      if (score > bestScore) {
+        bestScore = score;
+        best = app;
+      }
+    }
+    return { app: best, score: bestScore };
   }
 
   public onStatusUpdate?: (message: string) => void;

@@ -85,29 +85,53 @@ class AppDetectionService {
         };
       }
 
-      // METHOD 1: Use native module with getLaunchIntentForPackage (BEST - no picker, exact intent)
+      // METHOD 1: Use the native LauncherModule for direct launching (preferred)
       try {
-        const result = await nativeAppLauncher.launchApp(packageName);
-        // If it succeeds, return immediately
-        if (result.success) {
-          return result;
-        }
-        // If it fails with security error, that's final - Android is blocking it
-        if (
-          result.error?.toLowerCase().includes("security") ||
-          result.error?.toLowerCase().includes("protected")
-        ) {
-          return result;
-        }
-        // If native module says it's not available, try fallback
-        if (
-          result.error?.includes("not available") ||
-          result.error?.includes("rebuild")
-        ) {
-          // Fall through to fallback methods
-        } else {
-          // Other errors from native module are final
-          return result;
+
+        
+        // Try without an explicit activity first, then try common activity patterns
+        const attemptActivityNames = [
+          "",
+          this.guessMainActivity(packageName),
+          ...this.getAllActivityPatterns(packageName),
+        ];
+
+        for (const activityName of attemptActivityNames) {
+          try {
+            const result = await nativeAppLauncher.launchApp(
+              packageName,
+              activityName || undefined
+            );
+            if (result.success) {
+              return result;
+            }
+
+            // If it's a security restriction, stop trying and return the error
+            const errLower = (result.error || "").toLowerCase();
+            if (
+              errLower.includes("security") ||
+              errLower.includes("protected")
+            ) {
+              return result;
+            }
+
+            // If native module not loaded, fall through to other methods
+            if (
+              (result.error || "").includes("not loaded") ||
+              (result.error || "").includes("rebuild")
+            ) {
+              break; // give up trying activity patterns, proceed to JS fallbacks
+            }
+
+            // If this activity failed, continue to next pattern
+          } catch (errInner: any) {
+            // If native module threw, likely not available - break to fallbacks
+            console.warn(
+              "Native launcher threw, falling back to IntentLauncher:",
+              errInner?.message
+            );
+            break;
+          }
         }
       } catch (nativeError: any) {
         // Native module might not be available (needs rebuild), fall through to fallback

@@ -6,6 +6,8 @@
 // Try to load .env for local development (optional). If `dotenv` is not
 // installed this will be silently ignored so the script still works when
 // vars are provided externally (e.g. `OPENROUTER_API_KEY=... node ...`).
+import { NativeModules } from "react-native";
+
 try {
   require("dotenv").config();
 } catch (e) {
@@ -28,6 +30,8 @@ async function main() {
 
   try {
     if (openrouterKey) {
+      console.log("LauncherModule:", NativeModules.LauncherModule);
+
       console.log("Calling OpenRouter HTTP endpoint...");
       const body = JSON.stringify({
         model: DEFAULT_MODEL,
