@@ -41,6 +41,9 @@ export async function queryLLM(
           json?.output ??
           JSON.stringify(json)
         ).toString();
+      // fallback to text if json parse failed but body has text
+      const txtFallback = await resp.text().catch(() => null);
+      if (txtFallback) return txtFallback.toString();
     }
 
     // 2) OpenRouter HTTP
@@ -80,10 +83,14 @@ export async function queryLLM(
       if (j)
         return String(
           j?.choices?.[0]?.message?.content ??
+            j?.choices?.[0]?.text ??
             j?.output ??
             j?.result ??
             JSON.stringify(j)
         );
+      // fallback to raw text body
+      const orText = await resp.text().catch(() => null);
+      if (orText) return orText.toString();
     }
 
     // 3) Hugging Face
@@ -116,6 +123,8 @@ export async function queryLLM(
         if (data.generated_text) return data.generated_text;
         return JSON.stringify(data);
       }
+      const hfText = await hfResp.text().catch(() => null);
+      if (hfText) return hfText.toString();
     }
 
     throw new Error(

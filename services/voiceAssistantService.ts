@@ -26,6 +26,8 @@ class VoiceAssistantService {
   private processingCommand = false;
   private recordingTimer: NodeJS.Timeout | null = null;
   private audioModeSet = false;
+  // Prevent concurrent Recording.prepare/createAsync calls
+  private preparingRecording = false;
   // When true, avoid starting recordings (used while TTS is playing)
   private preventRecordingDuringSpeak = false;
   // Common name -> package aliases to improve recognition of app names
@@ -39,6 +41,14 @@ class VoiceAssistantService {
     facebook: "com.facebook.katana",
     spotify: "com.spotify.music",
     gmail: "com.google.android.gm",
+    // Camera aliases — common vendor package names and short forms
+    camera: "com.android.camera",
+    cam: "com.android.camera",
+    "camera app": "com.android.camera",
+    "google camera": "com.google.android.camera",
+    "samsung camera": "com.samsung.android.camera",
+    "miui camera": "com.miui.camera",
+    "huawei camera": "com.huawei.camera",
   };
 
   // Minimum confidence threshold for automatic recognition acceptance
@@ -133,6 +143,51 @@ class VoiceAssistantService {
       },
     });
 
+    // Explicit command to open the AppsScreen UI where apps are listed
+    this.registerCommand({
+      command: "open app list",
+      description: "Open the apps list screen",
+      keywords: ["open", "apps", "app list", "show apps", "open apps"],
+      action: async () => {
+        try {
+          // Navigate if the app sets onNavigate; otherwise just announce
+          if (this.onNavigate) {
+            try {
+              this.onNavigate("Apps");
+            } catch (e) {
+              console.warn("onNavigate threw:", e);
+            }
+          }
+          await this.speak("Opening application list");
+        } catch (err) {
+          console.error("Error opening app list:", err);
+          await this.speak("Unable to open application list");
+        }
+      },
+    });
+
+    // Also register a shorter command 'app list' for convenience
+    this.registerCommand({
+      command: "app list",
+      description: "Open the apps list screen (short)",
+      keywords: ["app list", "apps", "list apps", "show apps"],
+      action: async () => {
+        try {
+          if (this.onNavigate) {
+            try {
+              this.onNavigate("Apps");
+            } catch (e) {
+              console.warn("onNavigate threw:", e);
+            }
+          }
+          await this.speak("Opening application list");
+        } catch (err) {
+          console.error("Error opening app list:", err);
+          await this.speak("Unable to open application list");
+        }
+      },
+    });
+
     this.registerCommand({
       command: "hello",
       description: "Greets the user",
@@ -191,6 +246,23 @@ class VoiceAssistantService {
       }
 
       this.preventRecordingDuringSpeak = false;
+      // If we were listening before speaking, and no recording is active,
+      // attempt to restart the recorder so the assistant resumes listening.
+      try {
+        if (this.isListening && !this.recording && !this.processingCommand) {
+          // Small delay to let audio focus settle
+          setTimeout(() => {
+            // startRecording() is safe to call even if another start is scheduled
+            // it will return early if recording is already active.
+            // eslint-disable-next-line @typescript-eslint/no-floating-promises
+            this.startRecording();
+          }, 250);
+        }
+      } catch (e) {
+        // swallow any errors — speak should not throw on restart attempts
+        console.warn("Failed to auto-restart recording after speak:", e);
+      }
+
       return;
     } catch (error) {
       this.preventRecordingDuringSpeak = false;
@@ -408,6 +480,29 @@ class VoiceAssistantService {
 
     const searchTerm = appName.toLowerCase().trim();
 
+    // Quick alias check: map common short names directly to package names
+    const aliasKey = searchTerm.replace(/\s+/g, "");
+    if (this.APP_ALIASES[aliasKey]) {
+      const pkg = this.APP_ALIASES[aliasKey];
+      this.onStatusUpdate?.(`Opening ${appName}`);
+      this.speak(`Opening ${appName}`);
+      const res = await appDetectionService.launchApp(pkg);
+      if (res.success) return { success: true, message: `Launched ${appName}` };
+      // otherwise continue to try searching installed apps
+    }
+
+    // Also check individual words for aliases (e.g., 'camera' -> camera package)
+    for (const w of searchTerm.split(/\s+/)) {
+      if (this.APP_ALIASES[w]) {
+        const pkg = this.APP_ALIASES[w];
+        this.onStatusUpdate?.(`Opening ${appName}`);
+        this.speak(`Opening ${appName}`);
+        const res = await appDetectionService.launchApp(pkg);
+        if (res.success)
+          return { success: true, message: `Launched ${appName}` };
+      }
+    }
+
     // Try exact match first
     let matchingApp = apps.find(
       (app) => app.appName.toLowerCase() === searchTerm
@@ -437,26 +532,37 @@ class VoiceAssistantService {
     }
 
     if (matchingApp) {
-      // Speak immediately to acknowledge the request, then attempt launch.
-      this.onStatusUpdate?.(`Opening ${matchingApp.appName}`);
-      this.speak(`Opening ${matchingApp.appName}`);
-      const result = await appDetectionService.launchApp(
-        matchingApp.packageName
-      );
-      if (!result.success) {
-        const errorMsg = result.error || "Unable to launch application";
-        const fullMsg = `Failed to launch ${matchingApp.appName}: ${errorMsg}`;
-        await this.speak(`Failed to open ${matchingApp.appName}`);
-        return { success: false, message: fullMsg };
+      // Avoid launching Settings accidentally when the matched package is Settings
+      const pkgLower = (matchingApp.packageName || "").toLowerCase();
+      const askedSettings =
+        searchTerm.includes("setting") || searchTerm.includes("settings");
+      if (pkgLower.includes("settings") && !askedSettings) {
+        // Skip this Settings match and continue to fuzzy/suggestions below
       } else {
-        const msg = `Successfully launched ${matchingApp.appName}`;
-        // don't repeat too much when user switches apps; keep it short
-        return { success: true, message: msg };
+        // Speak immediately to acknowledge the request, then attempt launch.
+        this.onStatusUpdate?.(`Opening ${matchingApp.appName}`);
+        this.speak(`Opening ${matchingApp.appName}`);
+        const result = await appDetectionService.launchApp(
+          matchingApp.packageName
+        );
+        if (!result.success) {
+          const errorMsg = result.error || "Unable to launch application";
+          const fullMsg = `Failed to launch ${matchingApp.appName}: ${errorMsg}`;
+          await this.speak(`Failed to open ${matchingApp.appName}`);
+          return { success: false, message: fullMsg };
+        } else {
+          const msg = `Successfully launched ${matchingApp.appName}`;
+          return { success: true, message: msg };
+        }
       }
     } else {
       // Try a fuzzy best-match
       const { app: fuzzyApp, score } = this.findBestFuzzyApp(apps, searchTerm);
-      if (fuzzyApp && score >= 0.6) {
+      // For camera-related queries we accept a lower threshold because
+      // device camera app names vary widely and recognition can be noisy.
+      const isCameraQuery = /\bcam|camera\b/.test(searchTerm);
+      const threshold = isCameraQuery ? 0.5 : 0.6;
+      if (fuzzyApp && score >= threshold) {
         // Accept fuzzy match
         this.onStatusUpdate?.(`Opening ${fuzzyApp.appName}`);
         this.speak(`Opening ${fuzzyApp.appName}`);
@@ -590,6 +696,10 @@ class VoiceAssistantService {
       if (this.preventRecordingDuringSpeak) return; // still speaking — skip starting
     }
 
+    // Avoid concurrent prepare/createAsync calls which Expo AV rejects
+    if (this.preparingRecording) return;
+    this.preparingRecording = true;
+
     try {
       // Make sure we don't have an existing recording
       if (this.recording) {
@@ -621,6 +731,8 @@ class VoiceAssistantService {
       this.onStatusUpdate?.("An error occurred while starting to record.");
       this.isListening = false;
       this.onListeningStateChange?.(false);
+    } finally {
+      this.preparingRecording = false;
     }
   }
 
@@ -811,6 +923,8 @@ class VoiceAssistantService {
   public onStatusUpdate?: (message: string) => void;
   public onListeningStateChange?: (listening: boolean) => void;
   public onProcessingStateChange?: (processing: boolean) => void;
+  // Optional navigation callback (App can set this to allow opening screens)
+  public onNavigate?: (route: string) => void;
 
   getAvailableCommands(): VoiceCommand[] {
     return Array.from(this.commands.values());

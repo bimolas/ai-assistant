@@ -12,12 +12,11 @@ import { ProfileScreen } from "./screens/ProfileScreen";
 import { PodNavigation } from "./components/PodNavigation";
 import { BootSequence } from "./components/BootSequence";
 import { voiceService } from "./services/voiceService";
+import { voiceAssistantService } from "./services/voiceAssistantService";
 
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState("Home");
   const [isBooting, setIsBooting] = useState(true);
-
- 
 
   const renderScreen = () => {
     switch (currentRoute) {
@@ -37,6 +36,16 @@ export default function App() {
         return <HomeScreen />;
     }
   };
+
+  React.useEffect(() => {
+    // Wire navigation callback once so voice commands can open the Apps screen
+    voiceAssistantService.onNavigate = (route: string) => {
+      setCurrentRoute(route);
+    };
+    return () => {
+      voiceAssistantService.onNavigate = undefined;
+    };
+  }, []);
 
   return (
     <SafeAreaProvider>
