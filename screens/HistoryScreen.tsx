@@ -71,7 +71,9 @@ export const HistoryScreen: React.FC = () => {
             {/* timestamp on the same line when collapsed */}
             {!isExpanded && (
               <Text style={styles.timeInline} numberOfLines={1}>
-                {new Date(item.timestamp).toLocaleTimeString()}
+                {item.day && item.month && item.year && item.time
+                  ? `${item.day}/${item.month}/${item.year} ${item.time}`
+                  : new Date(item.timestamp).toLocaleTimeString()}
               </Text>
             )}
           </View>
@@ -83,7 +85,9 @@ export const HistoryScreen: React.FC = () => {
             {isLLM && <Text style={styles.responseText}>{item.response}</Text>}
             {!isLLM && <Text style={styles.responseText}>{item.command}</Text>}
             <Text style={styles.timeText}>
-              {new Date(item.timestamp).toLocaleString()}
+              {item.day && item.month && item.year && item.time
+                ? `${item.day}/${item.month}/${item.year} ${item.time}`
+                : new Date(item.timestamp).toLocaleString()}
             </Text>
           </View>
         )}

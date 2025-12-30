@@ -1,16 +1,28 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { YoRHaCard } from '../components/YoRHaCard';
-import { colors } from '../theme/colors';
-import { typography } from '../theme/typography';
-import { appDetectionService, InstalledApp } from '../services/appDetectionService';
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  TextInput,
+  Image,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import { YoRHaCard } from "../components/YoRHaCard";
+import { colors } from "../theme/colors";
+import { typography } from "../theme/typography";
+import {
+  appDetectionService,
+  InstalledApp,
+} from "../services/appDetectionService";
 
 export const AppsScreen: React.FC = () => {
   const [apps, setApps] = useState<InstalledApp[]>([]);
   const [filteredApps, setFilteredApps] = useState<InstalledApp[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,7 +38,7 @@ export const AppsScreen: React.FC = () => {
       setApps(installedApps);
       setFilteredApps(installedApps);
     } catch (err) {
-      setError('Failed to load applications');
+      setError("Failed to load applications");
       console.error(err);
     } finally {
       setLoading(false);
@@ -36,7 +48,7 @@ export const AppsScreen: React.FC = () => {
   useEffect(() => {
     if (searchQuery.trim()) {
       const filtered = apps.filter(
-        app =>
+        (app) =>
           app.appName.toLowerCase().includes(searchQuery.toLowerCase()) ||
           app.packageName.toLowerCase().includes(searchQuery.toLowerCase())
       );
@@ -55,19 +67,19 @@ export const AppsScreen: React.FC = () => {
         console.warn(`Failed to launch ${app.appName}:`, result.error);
       }
     } catch (err) {
-      console.error('Failed to launch app:', err);
+      console.error("Failed to launch app:", err);
     }
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.spacer} />
 
         <YoRHaCard elevated style={styles.headerCard}>
           <Text style={styles.label}>INSTALLED APPLICATIONS</Text>
           <Text style={styles.subtitle}>
-            {apps.length} application{apps.length !== 1 ? 's' : ''} detected
+            {apps.length} application{apps.length !== 1 ? "s" : ""} detected
           </Text>
         </YoRHaCard>
 
@@ -80,7 +92,12 @@ export const AppsScreen: React.FC = () => {
               value={searchQuery}
               onChangeText={setSearchQuery}
             />
-            <Ionicons name="search" size={20} color={colors.textTertiary} style={styles.searchIcon} />
+            <Ionicons
+              name="search"
+              size={20}
+              color={colors.textTertiary}
+              style={styles.searchIcon}
+            />
           </YoRHaCard>
         )}
 
@@ -101,35 +118,26 @@ export const AppsScreen: React.FC = () => {
           <YoRHaCard style={styles.emptyCard}>
             <Ionicons name="search" size={48} color={colors.textTertiary} />
             <Text style={styles.emptyText}>
-              {searchQuery ? 'No apps found matching your search' : 'No applications found'}
+              {searchQuery
+                ? "No apps found matching your search"
+                : "No applications found"}
             </Text>
             {searchQuery && (
-              <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearButton}>
+              <TouchableOpacity
+                onPress={() => setSearchQuery("")}
+                style={styles.clearButton}
+              >
                 <Text style={styles.clearButtonText}>Clear search</Text>
               </TouchableOpacity>
             )}
           </YoRHaCard>
         ) : (
-          filteredApps.map((app, index) => (
-            <YoRHaCard key={index} style={styles.appCard}>
-              <TouchableOpacity
-                onPress={() => handleLaunchApp(app)}
-                style={styles.appRow}
-                activeOpacity={0.7}
-              >
-                <View style={styles.appIcon}>
-                  <Ionicons name="cube" size={32} color={colors.accent} />
-                </View>
-                <View style={styles.appInfo}>
-                  <Text style={styles.appName}>{app.appName}</Text>
-                  <Text style={styles.appPackage}>{app.packageName}</Text>
-                  {app.version && (
-                    <Text style={styles.appVersion}>v{app.version}</Text>
-                  )}
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
-              </TouchableOpacity>
-            </YoRHaCard>
+          filteredApps.map((app) => (
+            <AppRow
+              key={app.packageName}
+              app={app}
+              onLaunch={handleLaunchApp}
+            />
           ))
         )}
 
@@ -143,6 +151,79 @@ export const AppsScreen: React.FC = () => {
         </YoRHaCard>
       </ScrollView>
     </SafeAreaView>
+  );
+};
+
+const AppRow: React.FC<{
+  app: InstalledApp;
+  onLaunch: (a: InstalledApp) => void;
+}> = ({ app, onLaunch }) => {
+  const [iconUri, setIconUri] = useState<string | undefined | null>(app.icon);
+
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        console.debug("[AppsScreen] loading native icon for", app.packageName);
+        // Ask service for native cached icon; it will return cached value or null
+        const nativeUri = await appDetectionService.getAppIcon(app.packageName);
+        console.debug(
+          "[AppsScreen] nativeUri for",
+          app.packageName,
+          nativeUri ? "<data>" : null
+        );
+        if (!mounted) return;
+        if (nativeUri) {
+          setIconUri(nativeUri);
+        } else if (app.icon) {
+          setIconUri(app.icon);
+        } else {
+          setIconUri(null);
+        }
+      } catch (err) {
+        console.warn("Failed to load app icon for", app.packageName, err);
+        if (mounted) setIconUri(app.icon ?? null);
+      }
+    };
+
+    // Always try to load native icon (will be quick if cached)
+    load();
+
+    return () => {
+      mounted = false;
+    };
+  }, [app.packageName]);
+
+  return (
+    <YoRHaCard style={styles.appCard}>
+      <TouchableOpacity
+        onPress={() => onLaunch(app)}
+        style={styles.appRow}
+        activeOpacity={0.7}
+      >
+        <View style={styles.appIcon}>
+          {iconUri ? (
+            <Image
+              source={{ uri: iconUri }}
+              style={{ width: 40, height: 40, borderRadius: 8 }}
+              resizeMode="cover"
+            />
+          ) : (
+            <Ionicons name="cube" size={32} color={colors.accent} />
+          )}
+        </View>
+        <View style={styles.appInfo}>
+          <Text style={styles.appName}>{app.appName}</Text>
+          <Text style={styles.appPackage}>{app.packageName}</Text>
+          {app.version && <Text style={styles.appVersion}>v{app.version}</Text>}
+        </View>
+        <Ionicons
+          name="chevron-forward"
+          size={20}
+          color={colors.textTertiary}
+        />
+      </TouchableOpacity>
+    </YoRHaCard>
   );
 };
 
@@ -163,7 +244,7 @@ const styles = StyleSheet.create({
   },
   searchCard: {
     marginBottom: 16,
-    position: 'relative',
+    position: "relative",
   },
   searchInput: {
     ...typography.body,
@@ -176,7 +257,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   searchIcon: {
-    position: 'absolute',
+    position: "absolute",
     right: 16,
     top: 16,
   },
@@ -192,7 +273,7 @@ const styles = StyleSheet.create({
   clearButtonText: {
     ...typography.bodySmall,
     color: colors.textPrimary,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   label: {
     ...typography.label,
@@ -203,7 +284,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   loadingCard: {
-    alignItems: 'center',
+    alignItems: "center",
     padding: 32,
     marginBottom: 16,
   },
@@ -213,7 +294,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   errorCard: {
-    alignItems: 'center',
+    alignItems: "center",
     padding: 32,
     marginBottom: 16,
   },
@@ -221,7 +302,7 @@ const styles = StyleSheet.create({
     ...typography.body,
     marginTop: 16,
     color: colors.error,
-    textAlign: 'center',
+    textAlign: "center",
   },
   retryButton: {
     marginTop: 16,
@@ -235,10 +316,10 @@ const styles = StyleSheet.create({
   retryText: {
     ...typography.body,
     color: colors.textPrimary,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   emptyCard: {
-    alignItems: 'center',
+    alignItems: "center",
     padding: 48,
     marginBottom: 16,
   },
@@ -251,22 +332,22 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     marginTop: 8,
     color: colors.textTertiary,
-    textAlign: 'center',
+    textAlign: "center",
   },
   appCard: {
     marginBottom: 12,
   },
   appRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
   },
   appIcon: {
     width: 50,
     height: 50,
     borderRadius: 12,
     backgroundColor: colors.surfaceHigh,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     marginRight: 12,
   },
   appInfo: {
@@ -274,14 +355,14 @@ const styles = StyleSheet.create({
   },
   appName: {
     ...typography.body,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.textPrimary,
     marginBottom: 4,
   },
   appPackage: {
     ...typography.bodySmall,
     color: colors.textTertiary,
-    fontFamily: 'monospace',
+    fontFamily: "monospace",
   },
   appVersion: {
     ...typography.bodySmall,
@@ -297,4 +378,3 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
 });
-

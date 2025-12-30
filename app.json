@@ -30,7 +30,8 @@
         "WRITE_EXTERNAL_STORAGE",
         "QUERY_ALL_PACKAGES",
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {

@@ -1,6 +1,13 @@
 import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
-import { Alert, Linking } from "react-native";
+import {
+  Alert,
+  Linking,
+  DeviceEventEmitter,
+  NativeModules,
+  PermissionsAndroid,
+  Platform,
+} from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import { appDetectionService } from "./appDetectionService";
 import { Buffer } from "buffer";
@@ -21,6 +28,188 @@ export interface CommandResult {
 }
 
 class VoiceAssistantService {
+  /**
+   * Handles the "where am I" voice command: requests location permission, gets location, reverse-geocodes, and speaks the result.
+   */
+  /**
+   * Handles the "where am I" voice command: requests location permission, gets location, reverse-geocodes, and speaks the result.
+   * Always returns a readable address string using the best available fields.
+   * Emits the raw JSON response for debugging if the address is incomplete.
+   */
+  private async handleWhereAmI(): Promise<string | void> {
+    this.setProcessingState(true);
+    this.emitStatus("Processing location...");
+    let finalAddress = "";
+    try {
+      // Use expo-location for permission and location
+      let Location: typeof import("expo-location");
+      try {
+        Location = require("expo-location");
+      } catch (e) {
+        await this.speak("Location services are not available on this device.");
+        this.setProcessingState(false);
+        this.setListeningState(true);
+        return;
+      }
+
+      // Request foreground location permission
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        await this.speak(
+          "I need location permission to tell you where you are."
+        );
+        this.setProcessingState(false);
+        this.setListeningState(true);
+        return;
+      }
+
+      // Get current position
+      let coords;
+      try {
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+        coords = loc.coords;
+      } catch (e) {
+        await this.speak("I couldn't determine your current location.");
+        this.setProcessingState(false);
+        this.setListeningState(true);
+        return;
+      }
+
+      // Reverse geocode using OpenStreetMap Nominatim
+      try {
+        const lat = coords.latitude;
+        const lon = coords.longitude;
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`;
+        const axios = require("axios");
+        let response;
+        try {
+          response = await axios.get(url, {
+            headers: {
+              "User-Agent": "YoRHa2B/1.0 (samielmourtazak@gmail.com)",
+            },
+            validateStatus: () => true, // Always resolve, handle status manually
+          });
+        } catch (err) {
+          this.emitStatus(
+            `Network error: ${err && err.message ? err.message : err}`
+          );
+          await this.speak("I could not reach the location service.");
+          return;
+        }
+
+        if (response.status === 403) {
+          this.emitStatus(
+            "Nominatim API returned 403 Forbidden. You may be rate-limited or missing a required User-Agent header. Try again later."
+          );
+          await this.speak(
+            "Location service is temporarily unavailable due to rate limits. Please try again later."
+          );
+          return;
+        }
+        if (response.status !== 200) {
+          this.emitStatus(
+            `Geocoding failed with status ${response.status}: ${response.statusText}`
+          );
+          await this.speak(
+            "I could not determine your address due to a service error."
+          );
+          return;
+        }
+
+        const address = response.data.address;
+        // Fallback to display_name if address is missing
+        if (!address) {
+          if (response.data.display_name) {
+            finalAddress = response.data.display_name;
+            await this.speak(`You are at ${finalAddress}.`);
+            this.emitStatus(`You are at ${finalAddress}.`);
+            try {
+              await historyService.addWithResponse("where am I", finalAddress);
+            } catch {}
+            return finalAddress;
+          } else {
+            await this.speak("I could not determine your address.");
+            this.emitStatus("No address found in geocoding response.");
+            return;
+          }
+        }
+
+        // Extract fields with multiple fallbacks
+        const getField = (...fields: string[]) => {
+          for (const f of fields) {
+            if (address[f]) return address[f];
+          }
+          return "";
+        };
+
+        const road = getField("road", "cycleway", "pedestrian", "footway");
+        const city = getField("city", "town", "village");
+        const suburb = getField("suburb", "neighbourhood");
+        const state = address.state || "";
+        const country = address.country || "";
+        const postcode = address.postcode || "";
+
+        // Compose address parts, skipping missing fields
+        let parts: string[] = [];
+        if (road) parts.push(road);
+        if (suburb) parts.push(suburb);
+        if (city) parts.push(city);
+        if (state) parts.push(state);
+        if (postcode) parts.push(postcode);
+        if (country) parts.push(country);
+
+        // If nothing found, fallback to display_name
+        if (parts.length === 0 && response.data.display_name) {
+          finalAddress = response.data.display_name;
+          await this.speak(`You are at ${finalAddress}.`);
+          this.emitStatus(`You are at ${finalAddress}.`);
+          try {
+            await historyService.addWithResponse("where am I", finalAddress);
+          } catch {}
+          return finalAddress;
+        }
+
+        // Compose readable string
+        finalAddress = parts.join(", ");
+        if (finalAddress) {
+          const responseText = `You are at ${finalAddress}.`;
+          await this.speak(responseText);
+          this.emitStatus(responseText);
+          try {
+            await historyService.addWithResponse("where am I", responseText);
+          } catch {}
+        } else {
+          // If still nothing, emit raw JSON for debugging
+          const debugMsg = `Unable to construct address. Raw: ${JSON.stringify(
+            response.data
+          )}`;
+          this.emitStatus(debugMsg);
+          await this.speak("I could not determine your address.");
+        }
+        return finalAddress;
+      } catch (e) {
+        // If we have coordinates but can't describe the address, emit raw JSON
+        if (coords) {
+          this.emitStatus(
+            `Reverse geocoding failed. ${e && e.message ? e.message : e}`
+          );
+          await this.speak(
+            "I know where you are, but I can’t describe the address."
+          );
+        } else {
+          await this.speak("I can’t access your location.");
+        }
+      }
+    } catch (e) {
+      await this.speak("I couldn't determine your current location.");
+    } finally {
+      this.setProcessingState(false);
+      this.setListeningState(true);
+    }
+    return finalAddress;
+  }
   private static instance: VoiceAssistantService;
   private isListening = false;
   private recording: Audio.Recording | null = null;
@@ -28,6 +217,33 @@ class VoiceAssistantService {
   private processingCommand = false;
   private recordingTimer: NodeJS.Timeout | null = null;
   private audioModeSet = false;
+  // Vosk native module integration
+  private voskEventEmitter: any = null;
+  private voskSubscription: any = null;
+  private voskErrorSubscription: any = null;
+  private voskPermissionSubscription: any = null;
+  private voskModelInitialized: boolean = false;
+  private lastVoskFinal: string | null = null;
+  private voskUtteranceTimer: any = null;
+  private voskMaxListenTimer: any = null;
+  private voskPaused = false;
+  private VOSK_UTTERANCE_TIMEOUT_MS = 1200;
+  private VOSK_CHUNK_MS = 5000;
+  private haveMicPermission: boolean = false;
+  private usingVosk = false;
+  private currentInterim = "";
+  // Enable verbose Vosk debug logs
+  private voskDebug = true;
+  // Public callbacks
+  public onStatusUpdate?: (message: string) => void;
+  public onListeningStateChange?: (listening: boolean) => void;
+  public onProcessingStateChange?: (processing: boolean) => void;
+
+  // Google Maps API key (from config, not hardcoded)
+  private GOOGLE_MAPS_API_KEY: string =
+    process.env.GOOGLE_MAPS_API_KEY ||
+    (Constants?.expoConfig?.extra as any)?.GOOGLE_MAPS_API_KEY ||
+    "";
   // Prevent concurrent Recording.prepare/createAsync calls
   private preparingRecording = false;
   // When true, avoid starting recordings (used while TTS is playing)
@@ -43,7 +259,6 @@ class VoiceAssistantService {
     facebook: "com.facebook.katana",
     spotify: "com.spotify.music",
     gmail: "com.google.android.gm",
-    // Camera aliases — common vendor package names and short forms
     camera: "com.android.camera",
     cam: "com.android.camera",
     "camera app": "com.android.camera",
@@ -65,6 +280,25 @@ class VoiceAssistantService {
     (Constants?.expoConfig?.extra as any)?.DEEPGRAM_API_KEY ||
     "06169037265ad5ab922a0fb6aec0ecfc3827be3e";
 
+  // Safe emitters that wrap user-provided callbacks with try/catch and logging
+  private emitStatus(message: string) {
+    try {
+      console.debug("VoiceAssistantService: status ->", message);
+      this.onStatusUpdate?.(message);
+    } catch (e) {
+      console.error("onStatusUpdate handler threw:", e);
+    }
+  }
+
+  private setListeningState(listening: boolean) {
+    try {
+      console.debug("VoiceAssistantService: listening ->", listening);
+      this.onListeningStateChange?.(listening);
+    } catch (e) {
+      console.error("onListeningStateChange handler threw:", e);
+    }
+  }
+
   static getInstance(): VoiceAssistantService {
     if (!VoiceAssistantService.instance) {
       VoiceAssistantService.instance = new VoiceAssistantService();
@@ -73,16 +307,99 @@ class VoiceAssistantService {
     return VoiceAssistantService.instance;
   }
 
+ 
+  private async startVoskChunk() {
+    if (!this.isListening || !this.usingVosk) return;
+
+    try {
+      this.lastVoskFinal = null;
+      this.voskPaused = false;
+
+      this.emitStatus("Recording...");
+
+      try {
+        (NativeModules as any).VoskSpeech.startListening();
+      } catch (e) {
+        console.warn("startVoskChunk: failed to start native listening:", e);
+        return;
+      }
+
+      if (this.voskMaxListenTimer) {
+        clearTimeout(this.voskMaxListenTimer);
+        this.voskMaxListenTimer = null;
+      }
+
+      this.voskMaxListenTimer = setTimeout(async () => {
+        this.voskPaused = true;
+        try {
+          (NativeModules as any).VoskSpeech.stopListening();
+        } catch (e) {}
+
+        if (this.lastVoskFinal && this.lastVoskFinal.trim() !== "") {
+          this.processingCommand = true;
+          this.setProcessingState(true);
+          this.emitStatus("Processing...");
+
+          try {
+            await this.processCommand(this.lastVoskFinal || "");
+          } catch (e) {
+            console.warn("startVoskChunk processing error:", e);
+          } finally {
+            this.processingCommand = false;
+            this.setProcessingState(false);
+            this.lastVoskFinal = null;
+          }
+        } else {
+          this.emitStatus("No command detected.");
+        }
+
+        if (this.voskMaxListenTimer) {
+          clearTimeout(this.voskMaxListenTimer);
+          this.voskMaxListenTimer = null;
+        }
+
+       
+        const waitForSpeechToFinish = async () => {
+          const isSpeaking = await Speech.isSpeakingAsync();
+          if (isSpeaking) {
+            setTimeout(waitForSpeechToFinish, 100);
+            return;
+          }
+
+          if (this.isListening && this.usingVosk) {
+            this.emitStatus("Listening (ready)");
+            setTimeout(() => {
+              if (this.isListening && this.usingVosk) {
+                this.startVoskChunk();
+              }
+            }, 250);
+          }
+        };
+
+        waitForSpeechToFinish();
+      }, this.VOSK_CHUNK_MS);
+    } catch (err) {
+      console.warn("startVoskChunk error:", err);
+    }
+  }
+
+  private setProcessingState(processing: boolean) {
+    try {
+      console.debug("VoiceAssistantService: processing ->", processing);
+      this.onProcessingStateChange?.(processing);
+    } catch (e) {
+      console.error("onProcessingStateChange handler threw:", e);
+    }
+  }
+
   private initializeCommands() {
-    // System commands with keywords for better matching
     this.registerCommand({
       command: "open settings",
       description: "Opens device settings",
       keywords: ["open", "settings"],
       action: async () => {
-        // Try to launch the native Settings app; speak only after we know the result.
         try {
-          this.onStatusUpdate?.("Attempting to open Settings");
+          this.emitStatus("Attempting to open Settings");
           const result = await appDetectionService.launchApp(
             "com.android.settings"
           );
@@ -91,13 +408,28 @@ class VoiceAssistantService {
           } else {
             console.warn("Opening settings failed:", result.error);
             await this.speak("Unable to open settings automatically.");
-            this.onStatusUpdate?.(result.error || "Unable to open settings");
+            this.emitStatus(result.error || "Unable to open settings");
           }
         } catch (err) {
           console.warn("Error launching settings:", err);
           await this.speak("Unable to open settings.");
-          this.onStatusUpdate?.("Error launching settings");
+          this.emitStatus("Error launching settings");
         }
+      },
+    });
+
+    this.registerCommand({
+      command: "where am I",
+      description: "Tells your current location",
+      keywords: [
+        "where am i",
+        "my location",
+        "where are we",
+        "location",
+        "current location",
+      ],
+      action: async () => {
+        await this.handleWhereAmI();
       },
     });
 
@@ -131,12 +463,9 @@ class VoiceAssistantService {
           if (apps.length === 0) {
             await this.speak("No applications detected.");
           } else {
-            // Speak a short, useful list (top 8) and provide a count
             const top = apps.slice(0, 8);
             const names = top.map((a) => a.appName).join(", ");
-            await this.speak(
-              `Found ${apps.length} applications. First ones: ${names}`
-            );
+            await this.speak(`Found ${apps.length} applications.`);
           }
         } catch (error) {
           console.error("Error detecting apps:", error);
@@ -145,8 +474,6 @@ class VoiceAssistantService {
       },
     });
 
-    // Also register a shorter command 'app list' and accept 'application list'
-    // for convenience and consistency with user phrasing.
     this.registerCommand({
       command: "app list",
       description: "Open the apps list screen (short)",
@@ -174,15 +501,14 @@ class VoiceAssistantService {
       },
     });
 
-    // Add an explicit 'open camera' command to improve recognition of camera
-    // requests (some devices / recognizers struggle with 'camera' matching).
+   
     this.registerCommand({
       command: "open camera",
       description: "Opens the device camera",
       keywords: ["open camera", "camera", "cam"],
       action: async () => {
         try {
-          this.onStatusUpdate?.("Opening camera");
+          this.emitStatus("Opening camera");
           const res = await appDetectionService.launchApp("com.android.camera");
           if (res.success) {
             await this.speak("Opening camera");
@@ -226,22 +552,19 @@ class VoiceAssistantService {
     options?: { rate?: number; pitch?: number }
   ): Promise<void> {
     try {
-      // Prevent the recorder from starting while we speak to avoid capturing TTS output
       this.preventRecordingDuringSpeak = true;
 
       const isSpeaking = await Speech.isSpeakingAsync();
       if (isSpeaking) await Speech.stop();
 
-      // Start speaking
       Speech.speak(text, {
         language: "en",
         pitch: options?.pitch || 1.0,
         rate: options?.rate || 0.9,
       });
 
-      // Wait until speaking finishes (or timeout)
       const start = Date.now();
-      const timeoutMs = 30000; // max wait 30s
+      const timeoutMs = 30000;
       while (true) {
         const speaking = await Speech.isSpeakingAsync();
         if (!speaking) break;
@@ -249,28 +572,10 @@ class VoiceAssistantService {
           console.warn("TTS speak() timeout reached");
           break;
         }
-        // small delay
         await new Promise((r) => setTimeout(r, 120));
       }
 
       this.preventRecordingDuringSpeak = false;
-      // If we were listening before speaking, and no recording is active,
-      // attempt to restart the recorder so the assistant resumes listening.
-      try {
-        if (this.isListening && !this.recording && !this.processingCommand) {
-          // Small delay to let audio focus settle
-          setTimeout(() => {
-            // startRecording() is safe to call even if another start is scheduled
-            // it will return early if recording is already active.
-            // eslint-disable-next-line @typescript-eslint/no-floating-promises
-            this.startRecording();
-          }, 250);
-        }
-      } catch (e) {
-        // swallow any errors — speak should not throw on restart attempts
-        console.warn("Failed to auto-restart recording after speak:", e);
-      }
-
       return;
     } catch (error) {
       this.preventRecordingDuringSpeak = false;
@@ -293,14 +598,9 @@ class VoiceAssistantService {
       .replace(/[^\w\s]/g, "")
       .trim();
 
-    // LLM trigger: if the user says the token '2b' anywhere in their utterance
-    // (e.g. "hey 2b what's the weather"), treat the remainder after the token
-    // as an LLM prompt and do not run normal command matching. We use a regex
-    // so we are tolerant to noisy recognition and punctuation.
     const triggerMatch = normalizedCommand.match(/\b2b\b/);
     if (triggerMatch) {
-      // Extract user text after the first occurrence of the token '2b' from
-      // the original (non-normalized) text to preserve punctuation and casing.
+      
       const userQuery = commandText.replace(/.*?\b2b\b[\s:,-]*/i, "").trim();
       if (!userQuery) {
         const msg = 'Please provide a question after "2b".';
@@ -309,9 +609,7 @@ class VoiceAssistantService {
       }
 
       try {
-        // Prompt guidance aimed at keeping replies short, in the Unit 2B style,
-        // and to attempt to infer intent when recognition is noisy. If the
-        // intent is ambiguous, ask a single short clarifying question.
+       
         const prompt = `User asked: "${userQuery}". You are Unit 2B from nier automata, a concise and helpful voice assistant. Reply briefly (one or two short sentences) in Unit 2B style from nier automata. If the audio appears noisy or the question is unclear, infer the most likely intent and answer succinctly; if you cannot safely infer intent, ask one short clarifying question. When giving documentation-like output, prefer Context7 formatting.`;
 
         const llmReply = await queryLLM(prompt).catch((e) => {
@@ -321,16 +619,15 @@ class VoiceAssistantService {
 
         if (!llmReply) {
           const msg = "Unable to get a response from the assistant.";
-          this.onStatusUpdate?.(msg);
+          this.emitStatus(msg);
           await this.speak(msg);
           return { success: false, message: msg };
         }
 
-        // Update UI immediately, then speak asynchronously to reduce perceived latency
-        this.onStatusUpdate?.(llmReply);
+        this.emitStatus(llmReply);
         this.speak(llmReply);
         try {
-          // Record the user's question and the assistant response together
+
           await historyService.addWithResponse(
             userQuery || commandText,
             llmReply
@@ -343,7 +640,6 @@ class VoiceAssistantService {
       }
     }
 
-    // Check for app launch commands FIRST (before other commands)
     if (
       normalizedCommand.startsWith("open ") ||
       normalizedCommand.startsWith("launch ")
@@ -355,7 +651,6 @@ class VoiceAssistantService {
       }
     }
 
-    // Check for exact match
     if (this.commands.has(normalizedCommand)) {
       const command = this.commands.get(normalizedCommand)!;
       await command.action();
@@ -365,7 +660,6 @@ class VoiceAssistantService {
       return { success: true, message: "Command executed successfully" };
     }
 
-    // Check for partial matches
     for (const [key, command] of this.commands.entries()) {
       if (normalizedCommand.includes(key) || key.includes(normalizedCommand)) {
         await command.action();
@@ -376,7 +670,6 @@ class VoiceAssistantService {
       }
     }
 
-    // Try keyword matching first - more lenient approach
     for (const [key, cmd] of this.commands.entries()) {
       for (const keyword of cmd.keywords) {
         if (normalizedCommand.includes(keyword)) {
@@ -389,14 +682,12 @@ class VoiceAssistantService {
       }
     }
 
-    // Try exact match
     const command = this.commands.get(normalizedCommand);
     if (command) {
       await command.action();
       return { success: true, message: `Command executed: ${command.command}` };
     }
 
-    // Try fuzzy match: compare word overlap
     let bestMatch: { command: VoiceCommand; score: number } | null = null;
     const inputWords = normalizedCommand.split(/\s+/);
 
@@ -421,17 +712,14 @@ class VoiceAssistantService {
       };
     }
 
-    // Fallback: allow voice commands like "open <app>" or "launch <app>" to open installed apps.
     const openMatch = normalizedCommand.match(/^(open|launch|start)\s+(.+)$/);
     if (openMatch) {
       const appQuery = openMatch[2].trim();
       try {
-        // First check aliases for common short names (youtube -> com.google.android.youtube)
-        // Normalize common phrases: collapse spaces and remove filler words
         const aliasKey = appQuery.toLowerCase().replace(/\s+/g, "");
         if (this.APP_ALIASES[aliasKey]) {
           const pkg = this.APP_ALIASES[aliasKey];
-          this.onStatusUpdate?.(`Opening ${appQuery}`);
+          this.emitStatus(`Opening ${appQuery}`);
           this.speak(`Opening ${appQuery}`);
           const launch = await appDetectionService.launchApp(pkg);
           if (!launch.success) {
@@ -444,7 +732,6 @@ class VoiceAssistantService {
           return { success: true, message: `Launched ${appQuery}` };
         }
 
-        // Otherwise use the generic handler which searches installed apps and launches
         const res = await this.handleAppLaunch(appQuery);
         return res;
       } catch (err: any) {
@@ -459,7 +746,6 @@ class VoiceAssistantService {
       }
     }
 
-    // As a fallback, ask the LLM for help (if configured).
     try {
       const prompt = `User said: "${commandText}". You are Unit 2B, a concise useful voice assistant. Reply briefly (one or two sentences). If the user intends to open an application, respond exactly with: OPEN_APP: <app name>. Otherwise give a short helpful answer.`;
       const llmReply = await queryLLM(prompt).catch((e) => {
@@ -471,7 +757,6 @@ class VoiceAssistantService {
         return { success: false, message: "Command not recognized" };
       }
 
-      // If LLM instructs to open app in the exact format OPEN_APP: name, handle it
       const openMatch = llmReply.match(/^OPEN_APP:\s*(.+)$/i);
       if (openMatch) {
         const appName = openMatch[1].trim();
@@ -479,11 +764,9 @@ class VoiceAssistantService {
         return res;
       }
 
-      // Otherwise update UI immediately then speak asynchronously
-      this.onStatusUpdate?.(llmReply);
+      this.emitStatus(llmReply);
       this.speak(llmReply);
       try {
-        // record the user's original command and the assistant reply
         await historyService.addWithResponse(commandText, llmReply);
       } catch {}
       return { success: true, message: "LLM response delivered" };
@@ -496,12 +779,11 @@ class VoiceAssistantService {
   private async handleAppLaunch(appName: string): Promise<any> {
     if (!appName || appName.trim() === "") {
       const msg = "Please specify an application name";
-      this.onStatusUpdate?.(msg);
+      this.emitStatus(msg);
       await this.speak(msg);
       return { success: false, message: msg };
     }
-    this.onStatusUpdate?.(`Searching for ${appName}`);
-    // Fire an acknowledgement TTS but don't block UI updates
+    this.emitStatus(`Searching for ${appName}`);
     const apps = await appDetectionService.getInstalledApps();
 
     if (apps.length === 0) {
@@ -512,11 +794,10 @@ class VoiceAssistantService {
 
     const searchTerm = appName.toLowerCase().trim();
 
-    // Quick alias check: map common short names directly to package names
     const aliasKey = searchTerm.replace(/\s+/g, "");
     if (this.APP_ALIASES[aliasKey]) {
       const pkg = this.APP_ALIASES[aliasKey];
-      this.onStatusUpdate?.(`Opening ${appName}`);
+      this.emitStatus(`Opening ${appName}`);
       this.speak(`Opening ${appName}`);
       const res = await appDetectionService.launchApp(pkg);
       if (res.success) {
@@ -525,14 +806,12 @@ class VoiceAssistantService {
         } catch {}
         return { success: true, message: `Launched ${appName}` };
       }
-      // otherwise continue to try searching installed apps
     }
 
-    // Also check individual words for aliases (e.g., 'camera' -> camera package)
     for (const w of searchTerm.split(/\s+/)) {
       if (this.APP_ALIASES[w]) {
         const pkg = this.APP_ALIASES[w];
-        this.onStatusUpdate?.(`Opening ${appName}`);
+        this.emitStatus(`Opening ${appName}`);
         this.speak(`Opening ${appName}`);
         const res = await appDetectionService.launchApp(pkg);
         if (res.success) {
@@ -544,26 +823,22 @@ class VoiceAssistantService {
       }
     }
 
-    // Try exact match first
     let matchingApp = apps.find(
       (app) => app.appName.toLowerCase() === searchTerm
     );
 
-    // Try partial match in app name
     if (!matchingApp) {
       matchingApp = apps.find((app) =>
         app.appName.toLowerCase().includes(searchTerm)
       );
     }
 
-    // Try partial match in package name
     if (!matchingApp) {
       matchingApp = apps.find((app) =>
         app.packageName.toLowerCase().includes(searchTerm)
       );
     }
 
-    // Try fuzzy matching (words in app name)
     if (!matchingApp) {
       const searchWords = searchTerm.split(/\s+/);
       matchingApp = apps.find((app) => {
@@ -573,15 +848,12 @@ class VoiceAssistantService {
     }
 
     if (matchingApp) {
-      // Avoid launching Settings accidentally when the matched package is Settings
       const pkgLower = (matchingApp.packageName || "").toLowerCase();
       const askedSettings =
         searchTerm.includes("setting") || searchTerm.includes("settings");
       if (pkgLower.includes("settings") && !askedSettings) {
-        // Skip this Settings match and continue to fuzzy/suggestions below
       } else {
-        // Speak immediately to acknowledge the request, then attempt launch.
-        this.onStatusUpdate?.(`Opening ${matchingApp.appName}`);
+        this.emitStatus(`Opening ${matchingApp.appName}`);
         this.speak(`Opening ${matchingApp.appName}`);
         const result = await appDetectionService.launchApp(
           matchingApp.packageName
@@ -600,15 +872,11 @@ class VoiceAssistantService {
         }
       }
     } else {
-      // Try a fuzzy best-match
       const { app: fuzzyApp, score } = this.findBestFuzzyApp(apps, searchTerm);
-      // For camera-related queries we accept a lower threshold because
-      // device camera app names vary widely and recognition can be noisy.
       const isCameraQuery = /\bcam|camera\b/.test(searchTerm);
       const threshold = isCameraQuery ? 0.5 : 0.6;
       if (fuzzyApp && score >= threshold) {
-        // Accept fuzzy match
-        this.onStatusUpdate?.(`Opening ${fuzzyApp.appName}`);
+        this.emitStatus(`Opening ${fuzzyApp.appName}`);
         this.speak(`Opening ${fuzzyApp.appName}`);
         const launchRes = await appDetectionService.launchApp(
           fuzzyApp.packageName
@@ -627,7 +895,6 @@ class VoiceAssistantService {
         }
       }
 
-      // Provide suggestions based on simple substring matches for clarity
       const similar = apps
         .filter((app) => {
           const appNameLower = app.appName.toLowerCase();
@@ -641,14 +908,14 @@ class VoiceAssistantService {
       if (similar.length > 0) {
         const suggestions = similar.map((app) => app.appName).join(", ");
         const msg = `Application "${appName}" not found. Did you mean: ${suggestions}?`;
-        this.onStatusUpdate?.(msg);
+        this.emitStatus(msg);
         await this.speak(
           `Application ${appName} not found. Did you mean: ${suggestions}?`
         );
         return { success: false, message: msg };
       } else {
         const msg = `Application "${appName}" not found. Use "list apps" to see available applications.`;
-        this.onStatusUpdate?.(msg);
+        this.emitStatus(msg);
         await this.speak(
           `Application ${appName} not found. Use "list apps" to see available applications.`
         );
@@ -657,30 +924,233 @@ class VoiceAssistantService {
     }
   }
 
+  private async ensureVoskModel(): Promise<boolean> {
+    if (this.voskModelInitialized) return true;
+    try {
+      const mod = (NativeModules as any).VoskSpeech;
+      if (!mod || typeof mod.initModel !== "function") {
+        if (this.voskDebug)
+          console.warn("ensureVoskModel: native module missing");
+        return false;
+      }
+      await mod.initModel();
+      this.voskModelInitialized = true;
+      if (this.voskDebug) console.debug("ensureVoskModel: model initialized");
+      return true;
+    } catch (e) {
+      console.warn("ensureVoskModel failed:", e);
+      return false;
+    }
+  }
+
+  private async ensureMicPermission(): Promise<boolean> {
+    try {
+      if (this.haveMicPermission) return true;
+      if (Platform.OS !== "android") {
+        // iOS handled elsewhere
+        this.haveMicPermission = true;
+        return true;
+      }
+      if (this.voskDebug)
+        console.debug("ensureMicPermission: checking existing permission");
+      const checked = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+      );
+      if (checked) {
+        this.haveMicPermission = true;
+        if (this.voskDebug)
+          console.debug("ensureMicPermission: already granted");
+        return true;
+      }
+      if (this.voskDebug)
+        console.debug("ensureMicPermission: requesting permission");
+      const perm = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: "Microphone Permission",
+          message:
+            "This app needs access to your microphone for speech recognition.",
+          buttonPositive: "OK",
+        }
+      );
+      if (this.voskDebug)
+        console.debug("ensureMicPermission: request result", perm);
+      if (perm === PermissionsAndroid.RESULTS.GRANTED) {
+        this.haveMicPermission = true;
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.warn("ensureMicPermission error:", e);
+      return false;
+    }
+  }
+
   // ---------------- RECORDING & RECOGNITION ----------------
-  /**
-   * Start listening for a voice command.
-   * Ensures permissions, sets audio mode, and starts recording.
-   * Robust to errors and always keeps state flags consistent.
-   */
+ 
   async startListening(): Promise<boolean> {
     if (this.isListening || this.processingCommand) return false;
-    try {
-      const perm = await Audio.requestPermissionsAsync();
-      const granted =
-        (perm as any).granted ?? (perm as any).status === "granted";
-      if (!granted) {
+
+    // Ensure microphone permission first
+    if (Platform.OS === "android") {
+      if (this.voskDebug)
+        console.debug("startListening: checking mic permission");
+      const ok = await this.ensureMicPermission();
+      if (!ok) {
         await this.speak(
           "Microphone permission required. Please enable microphone access in app settings."
         );
-        this.onStatusUpdate?.("Microphone permission required.");
+        this.emitStatus("Microphone permission required.");
         this.isListening = false;
-        this.onListeningStateChange?.(false);
-        // Offer user a quick way to open app settings so they can re-enable the mic
-       
-        
+        this.setListeningState(false);
         return false;
       }
+    }
+
+    if (Platform.OS === "android" && (NativeModules as any).VoskSpeech) {
+      try {
+        if (this.voskDebug)
+          console.debug("Vosk: native module detected, starting native path");
+
+        const perm = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: "Microphone Permission",
+            message:
+              "This app needs access to your microphone for offline speech recognition.",
+            buttonPositive: "OK",
+          }
+        );
+        if (perm !== PermissionsAndroid.RESULTS.GRANTED) {
+          await this.speak(
+            "Microphone permission required. Please enable microphone access in app settings."
+          );
+          this.emitStatus("Microphone permission required.");
+          this.isListening = false;
+          this.setListeningState(false);
+          return false;
+        }
+
+        const okModel = await this.ensureVoskModel();
+        if (!okModel) {
+          this.emitStatus(
+            "Offline speech model failed to initialize. Please ensure the model is placed in android/app/src/main/assets/model/"
+          );
+          this.usingVosk = false;
+          return false;
+        }
+
+        this.usingVosk = true;
+        if (this.voskDebug)
+          console.debug("Vosk: permission granted, subscribing to events");
+
+        if (this.voskSubscription) {
+          try {
+            this.voskSubscription.remove();
+          } catch {}
+          this.voskSubscription = null;
+        }
+
+        this.voskSubscription = DeviceEventEmitter.addListener(
+          "VoskSpeechResult",
+          async (payload: any) => {
+            try {
+              if (this.voskPaused) return;
+              if (this.voskDebug)
+                console.debug("Vosk event received:", payload);
+              const text = payload && payload.text ? String(payload.text) : "";
+              const isFinal = !!payload.final;
+              if (!isFinal) {
+                this.currentInterim = text;
+              } else {
+                this.currentInterim = "";
+              
+                if (text && text.trim() !== "") {
+                 
+                  this.lastVoskFinal = text;
+                  if (this.voskDebug)
+                    console.debug("Buffered Vosk final:", this.lastVoskFinal);
+                }
+              }
+            } catch (e) {
+              console.warn("Vosk event handler error:", e);
+            }
+          }
+        );
+
+        if (this.voskErrorSubscription) {
+          try {
+            this.voskErrorSubscription.remove();
+          } catch {}
+          this.voskErrorSubscription = null;
+        }
+        this.voskErrorSubscription = DeviceEventEmitter.addListener(
+          "VoskSpeechError",
+          (payload: any) => {
+            console.warn("VoskSpeechError event:", payload);
+            this.emitStatus(`Vosk error: ${payload?.error || "unknown"}`);
+          }
+        );
+
+        if (this.voskPermissionSubscription) {
+          try {
+            this.voskPermissionSubscription.remove();
+          } catch {}
+          this.voskPermissionSubscription = null;
+        }
+        this.voskPermissionSubscription = DeviceEventEmitter.addListener(
+          "VoskPermissionRequired",
+          () => {
+            console.warn("Vosk requested native permission (native check)");
+            this.emitStatus("Vosk requires RECORD_AUDIO permission.");
+          }
+        );
+
+        if (this.voskDebug) console.debug("Vosk: starting native chunk loop");
+        try {
+          if (this.voskMaxListenTimer) {
+            try {
+              clearTimeout(this.voskMaxListenTimer);
+            } catch (e) {}
+            this.voskMaxListenTimer = null;
+          }
+
+          Speech.speak("Listening to your command.");
+
+          this.isListening = true;
+          this.setListeningState(true);
+          this.emitStatus("Listening (offline)");
+
+          this.startVoskChunk();
+          return true;
+        } catch (e) {
+          console.warn("Failed to start Vosk native chunk loop:", e);
+          this.emitStatus("Failed to start native speech recognition.");
+          this.usingVosk = false;
+          return false;
+        }
+      } catch (err) {
+        console.error("Error starting Vosk listening:", err);
+        this.usingVosk = false;
+      }
+    }
+
+    try {
+      if (Platform.OS === "ios") {
+        const perm = await Audio.requestPermissionsAsync();
+        const granted =
+          (perm as any).granted ?? (perm as any).status === "granted";
+        if (!granted) {
+          await this.speak(
+            "Microphone permission required. Please enable microphone access in app settings."
+          );
+          this.emitStatus("Microphone permission required.");
+          this.isListening = false;
+          this.setListeningState(false);
+          return false;
+        }
+      }
+
       if (!this.audioModeSet) {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: true,
@@ -690,33 +1160,91 @@ class VoiceAssistantService {
         });
         this.audioModeSet = true;
       }
+
       this.isListening = true;
-      this.onListeningStateChange?.(true);
-      await this.speak("Listening to your command.");
-      this.onStatusUpdate?.("Listening to your command");
+      this.setListeningState(true);
+
+      this.preventRecordingDuringSpeak = true;
+      Speech.speak("Listening to your command.");
+      this.emitStatus("Listening to your command");
+
+      setTimeout(() => {
+        this.preventRecordingDuringSpeak = false;
+      }, 600);
+
       await this.startRecording();
       return true;
     } catch (error) {
       console.error("Error starting listening:", error);
       this.isListening = false;
-      this.onListeningStateChange?.(false);
-      this.onStatusUpdate?.("Error starting voice recognition.");
+      this.setListeningState(false);
+      this.emitStatus("Error starting voice recognition.");
       return false;
     }
   }
 
-  /**
-   * Stop listening and clean up recording state.
-   * Always clears timers and recording references, even on error.
-   */
   async stopListening(): Promise<void> {
     if (!this.isListening) return;
+
     this.isListening = false;
-    this.onListeningStateChange?.(false);
+    this.setListeningState(false);
+
+    if (this.voskUtteranceTimer) {
+      try {
+        clearTimeout(this.voskUtteranceTimer);
+      } catch (e) {}
+      this.voskUtteranceTimer = null;
+    }
+
+    if (this.voskMaxListenTimer) {
+      try {
+        clearTimeout(this.voskMaxListenTimer);
+      } catch (e) {}
+      this.voskMaxListenTimer = null;
+    }
+
+    this.voskPaused = false;
+    this.lastVoskFinal = null;
+
+    if (this.usingVosk) {
+      try {
+        try {
+          (NativeModules as any).VoskSpeech.stopListening();
+        } catch (e) {}
+        if (this.voskSubscription) {
+          try {
+            this.voskSubscription.remove();
+          } catch (e) {}
+          this.voskSubscription = null;
+        }
+        if (this.voskErrorSubscription) {
+          try {
+            this.voskErrorSubscription.remove();
+          } catch (e) {}
+          this.voskErrorSubscription = null;
+        }
+        if (this.voskPermissionSubscription) {
+          try {
+            this.voskPermissionSubscription.remove();
+          } catch (e) {}
+          this.voskPermissionSubscription = null;
+        }
+      } catch (err) {
+        console.warn("Error stopping Vosk native listener:", err);
+      } finally {
+        this.usingVosk = false;
+        this.currentInterim = "";
+        this.emitStatus("Stop listening");
+        await this.speak("Stop listening");
+      }
+      return;
+    }
+
     if (this.recordingTimer) {
       clearTimeout(this.recordingTimer);
       this.recordingTimer = null;
     }
+
     try {
       if (this.recording) {
         const status = await this.recording.getStatusAsync();
@@ -729,17 +1257,23 @@ class VoiceAssistantService {
     } finally {
       this.recording = null;
       this.processingCommand = false;
-      this.onStatusUpdate?.("Stop listening");
+      this.emitStatus("Stop listening");
       await this.speak("Stop listening");
     }
   }
 
-  /**
-   * Start a new audio recording session.
-   * Ensures no stale recording, waits for TTS to finish, and sets up timer.
-   */
   private async startRecording() {
     if (!this.isListening || this.processingCommand) return;
+
+    // If native Vosk is present, avoid starting Expo recordings to prevent conflicts
+    if (Platform.OS === "android" && (NativeModules as any).VoskSpeech) {
+      if (this.voskDebug)
+        console.debug(
+          "startRecording: skipping Expo recording because Vosk native is available"
+        );
+      return;
+    }
+
     if (this.preventRecordingDuringSpeak) {
       const start = Date.now();
       while (this.preventRecordingDuringSpeak && Date.now() - start < 5000) {
@@ -747,32 +1281,32 @@ class VoiceAssistantService {
       }
       if (this.preventRecordingDuringSpeak) return;
     }
+
     if (this.preparingRecording) return;
     this.preparingRecording = true;
+
     try {
       await this.cleanupRecording();
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
       this.recording = recording;
-      this.onStatusUpdate?.("Recording...");
+      this.emitStatus("Recording...");
+
       this.recordingTimer = setTimeout(async () => {
         await this.stopRecording();
       }, 5000);
     } catch (err) {
       console.error("Error starting recording:", err);
       this.isListening = false;
-      this.onListeningStateChange?.(false);
-      this.onStatusUpdate?.("An error occurred while starting to record.");
+      this.setListeningState(false);
+      this.emitStatus("An error occurred while starting to record.");
     } finally {
       this.preparingRecording = false;
     }
   }
 
-  /**
-   * Clean up any existing recording, stopping and unloading if needed.
-   * Always clears the recording reference.
-   */
+ 
   private async cleanupRecording() {
     if (this.recording) {
       try {
@@ -788,14 +1322,12 @@ class VoiceAssistantService {
     }
   }
 
-  /**
-   * Stop the current recording and process the audio.
-   * Handles errors gracefully and always clears recording reference.
-   */
   private async stopRecording() {
     if (!this.recording || !this.isListening) return;
+
     this.processingCommand = true;
-    this.onStatusUpdate?.("Processing...");
+    this.emitStatus("Processing...");
+
     let uri: string | null = null;
     try {
       try {
@@ -806,164 +1338,61 @@ class VoiceAssistantService {
       uri = this.recording.getURI();
     } catch (err) {
       console.error("Recording error:", err);
-      this.onStatusUpdate?.("An error occurred while recording.");
+      this.emitStatus("An error occurred while recording.");
     } finally {
       this.recording = null;
     }
-    // Process the audio if we have a valid URI
+
     if (!uri) {
-      this.onStatusUpdate?.("No audio detected.");
+      this.emitStatus("No audio detected.");
     } else {
       try {
         const fileInfo = await FileSystem.getInfoAsync(uri);
         if (!fileInfo.exists || fileInfo.size < 2000) {
-          this.onStatusUpdate?.("No command detected.");
+          this.emitStatus("No command detected.");
         } else {
-          const transcript = await this.recognizeAudio(uri);
-          if (!transcript || transcript.trim() === "") {
-            this.onStatusUpdate?.("Could not recognize speech.");
-          } else {
-            const result = await this.processCommand(transcript);
-            if (!result.success) {
-              this.onStatusUpdate?.(
-                result.message || "Command not recognized."
+    
+          if (Platform.OS === "android" && (NativeModules as any).VoskSpeech) {
+            if (this.voskDebug)
+              console.debug(
+                "stopRecording: Vosk native available — relying on native events"
               );
-            }
+          } else {
+            this.emitStatus("Offline STT not available on this platform.");
           }
         }
       } catch (err) {
         console.error("Audio file error:", err);
-        this.onStatusUpdate?.("Audio file error.");
+        this.emitStatus("Audio file error.");
       }
     }
+
     this.processingCommand = false;
-    // If still listening, restart the recording process
-    if (this.isListening) {
-      setTimeout(() => {
-        if (this.isListening) {
-          this.startRecording();
-        }
-      }, 1000);
-    }
+
+    const waitForSpeechToFinish = async () => {
+      const isSpeaking = await Speech.isSpeakingAsync();
+      if (isSpeaking) {
+        setTimeout(waitForSpeechToFinish, 100);
+        return;
+      }
+
+      if (this.isListening) {
+        setTimeout(() => {
+          if (this.isListening) {
+            this.startRecording();
+          }
+        }, 1000);
+      }
+    };
+
+    waitForSpeechToFinish();
   }
 
   private async recognizeAudio(uri: string): Promise<string | null> {
-    try {
-      // Read file as base64
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      // Convert base64 to Buffer
-      const buffer = Buffer.from(base64, "base64");
-
-      // Send audio to Deepgram using fetch (works reliably in RN/Expo).
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
-
-      // `buffer` is a Node-style Buffer (from 'buffer'). Convert to Uint8Array
-      // Fetch accepts typed arrays as body in React Native/Expo.
-      const uint8 = Uint8Array.from(buffer as any);
-
-      // Helper: pick best transcript from alternatives using confidence
-      // and favor slightly longer transcripts when confidence is close.
-      const selectTranscript = (
-        alternatives: any[],
-        minConf: number,
-        minWords: number
-      ) => {
-        if (!alternatives || alternatives.length === 0) return null;
-        let best: any = alternatives[0];
-        let bestScore = -Infinity;
-        for (const alt of alternatives) {
-          const t = (alt.transcript || "").trim();
-          const words = t ? t.split(/\s+/).filter(Boolean).length : 0;
-          const conf = typeof alt.confidence === "number" ? alt.confidence : 0;
-          // Score favors confidence first, but prefers longer transcripts when
-          // confidences are close to avoid very short low-info picks.
-          const score = conf * (1 + Math.log(1 + words) / 5) + words * 0.001;
-          if (score > bestScore) {
-            bestScore = score;
-            best = alt;
-          }
-        }
-        const transcript = best.transcript || null;
-        if (!transcript) return null;
-        const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length;
-        const confVal =
-          typeof best.confidence === "number" ? best.confidence : 0;
-        if (confVal < minConf && wordCount < minWords) {
-          // low confidence and very short -> reject
-          console.warn("Low-confidence short recognition ignored", {
-            transcript,
-            conf: confVal,
-          });
-          return null;
-        }
-        return transcript && transcript.trim() ? transcript : null;
-      };
-
-      const resp = await fetch(
-        "https://api.deepgram.com/v1/listen?punctuate=true&language=en-US",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Token ${this.DEEPGRAM_API_KEY}`,
-            "Content-Type": "audio/wav",
-          },
-          body: uint8,
-          signal: controller.signal,
-        }
-      );
-
-      clearTimeout(timeout);
-
-      // Retry once when the request fails (network flakiness)
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => "");
-        console.warn(
-          "Deepgram response error, retrying once:",
-          resp.status,
-          text
-        );
-        // retry once
-        const resp2 = await fetch(
-          "https://api.deepgram.com/v1/listen?punctuate=true&language=en-US",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Token ${this.DEEPGRAM_API_KEY}`,
-              "Content-Type": "audio/wav",
-            },
-            body: uint8,
-            signal: controller.signal,
-          }
-        ).catch(() => null as any);
-        if (!resp2 || !resp2.ok) {
-          const t2 = resp2 ? await resp2.text().catch(() => "") : "";
-          console.error("Deepgram retry failed:", resp2?.status, t2);
-          return null;
-        }
-        const data2 = await resp2.json().catch(() => null);
-        const alternatives2 = data2?.results?.channels?.[0]?.alternatives || [];
-        return selectTranscript(
-          alternatives2,
-          this.MIN_RECOGNITION_CONFIDENCE,
-          this.MIN_WORDS_FOR_LOW_CONFIDENCE
-        );
-      }
-
-      const data = await resp.json();
-      const alternatives = data?.results?.channels?.[0]?.alternatives || [];
-      return selectTranscript(
-        alternatives,
-        this.MIN_RECOGNITION_CONFIDENCE,
-        this.MIN_WORDS_FOR_LOW_CONFIDENCE
-      );
-    } catch (err) {
-      console.error("Deepgram recognition error:", err);
-      return null;
-    }
+ 
+    if (this.voskDebug)
+      console.debug("recognizeAudio: network STT disabled; returning null");
+    return null;
   }
 
   // ----------------- FUZZY MATCH HELPERS -----------------
@@ -1002,9 +1431,8 @@ class VoiceAssistantService {
       const pkg = app.packageName.toLowerCase();
       const maxLen = Math.max(name.length, q.length, 1);
       const d = this.levenshtein(name, q);
-      const scoreName = 1 - d / maxLen; // normalized similarity
+      const scoreName = 1 - d / maxLen; 
 
-      // also check prefix similarity for short queries
       const prefixScore = name.startsWith(q) || pkg.startsWith(q) ? 1 : 0;
 
       const score = Math.max(scoreName, prefixScore);
@@ -1016,24 +1444,15 @@ class VoiceAssistantService {
     return { app: best, score: bestScore };
   }
 
-  public onStatusUpdate?: (message: string) => void;
-  public onListeningStateChange?: (listening: boolean) => void;
-  public onProcessingStateChange?: (processing: boolean) => void;
-  // Optional navigation callback (App can set this to allow opening screens)
   public onNavigate?: (route: string) => void;
 
-  // Routes where continuous listening is allowed. Callers can override.
   public allowedListeningRoutes: string[] = [
     "VoiceAssistant",
     "Voice",
     "VoiceScreen",
   ];
 
-  /**
-   * Notify the assistant that the app navigated to a new route.
-   * If the new route is not in `allowedListeningRoutes` the assistant
-   * will stop listening to avoid background recording conflicts.
-   */
+
   public notifyNavigation(route: string) {
     try {
       const normalized = (route || "").toString();
@@ -1052,9 +1471,6 @@ class VoiceAssistantService {
     }
   }
 
-  /**
-   * Replace the set of routes where continuous listening is allowed.
-   */
   public setAllowedListeningRoutes(routes: string[]) {
     this.allowedListeningRoutes = Array.isArray(routes)
       ? routes

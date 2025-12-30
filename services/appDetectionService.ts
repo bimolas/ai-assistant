@@ -1,5 +1,5 @@
 import * as Application from "expo-application";
-import { Platform, Linking } from "react-native";
+import { Platform, Linking, NativeModules } from "react-native";
 import * as IntentLauncher from "expo-intent-launcher";
 import { getInstalledApps } from "@zecky-dev/react-native-app-list";
 import { nativeAppLauncher } from "./nativeAppLauncher";
@@ -16,6 +16,7 @@ export interface InstalledApp {
 class AppDetectionService {
   private static instance: AppDetectionService;
   private appsCache: InstalledApp[] = [];
+  private iconCache: Map<string, string | null> = new Map();
 
   static getInstance(): AppDetectionService {
     if (!AppDetectionService.instance) {
@@ -87,8 +88,6 @@ class AppDetectionService {
 
       // METHOD 1: Use the native LauncherModule for direct launching (preferred)
       try {
-
-        
         // Try without an explicit activity first, then try common activity patterns
         const attemptActivityNames = [
           "",
@@ -236,6 +235,40 @@ class AppDetectionService {
   async getAppInfo(packageName: string): Promise<InstalledApp | null> {
     const apps = await this.getInstalledApps();
     return apps.find((app) => app.packageName === packageName) || null;
+  }
+
+  async getAppIcon(packageName: string): Promise<string | null> {
+    try {
+      const cached = this.iconCache.get(packageName);
+      if (cached !== undefined) return cached;
+
+      const hasNative = !!(
+        NativeModules &&
+        NativeModules.AppIcon &&
+        NativeModules.AppIcon.getAppIcon
+      );
+      console.debug(
+        `[AppDetectionService] getAppIcon: native module available = ${hasNative}`
+      );
+
+      if (!hasNative) {
+        this.iconCache.set(packageName, null);
+        return null;
+      }
+
+      const res = await NativeModules.AppIcon.getAppIcon(packageName);
+      console.debug(
+        `[AppDetectionService] getAppIcon result for ${packageName}:`,
+        res ? "<data>" : null
+      );
+      const uri = typeof res === "string" ? res : null;
+      this.iconCache.set(packageName, uri);
+      return uri;
+    } catch (err) {
+      console.warn("getAppIcon error:", err);
+      this.iconCache.set(packageName, null);
+      return null;
+    }
   }
 
   async searchApps(query: string): Promise<InstalledApp[]> {

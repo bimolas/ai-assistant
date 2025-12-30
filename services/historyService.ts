@@ -26,6 +26,10 @@ export interface HistoryEntry {
   type?: string;
   short?: string; // Truncated display text
   expandable?: boolean; // If true, can expand to see full details
+  day?: string; // two-digit day
+  month?: string; // two-digit month
+  year?: string; // two-digit year
+  time?: string; // HH:MM
 }
 
 const FILENAME = `${FileSystem.documentDirectory}db-history.json`;
@@ -58,6 +62,22 @@ export const historyService = {
       command,
       timestamp: Date.now(),
     };
+    // add numeric day/month/year (two-digit) and HH:MM time
+    try {
+      const d = new Date(entry.timestamp);
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const yy = String(d.getFullYear()).slice(-2).padStart(2, "0");
+      const tt = `${String(d.getHours()).padStart(2, "0")}:${String(
+        d.getMinutes()
+      ).padStart(2, "0")}`;
+      entry.day = dd;
+      entry.month = mm;
+      entry.year = yy;
+      entry.time = tt;
+    } catch (e) {
+      /* ignore */
+    }
     // Deduplicate immediate repeats (same command within a short window).
     // Normalize whitespace and case for comparison so minor formatting
     // differences don't cause duplicates.
@@ -71,6 +91,17 @@ export const historyService = {
     ) {
       // update timestamp instead of adding duplicate
       last.timestamp = entry.timestamp;
+      try {
+        const d = new Date(entry.timestamp);
+        last.day = String(d.getDate()).padStart(2, "0");
+        last.month = String(d.getMonth() + 1).padStart(2, "0");
+        last.year = String(d.getFullYear()).slice(-2).padStart(2, "0");
+        last.time = `${String(d.getHours()).padStart(2, "0")}:${String(
+          d.getMinutes()
+        ).padStart(2, "0")}`;
+      } catch (e) {
+        /* ignore */
+      }
       await writeFile(items);
       return last;
     }
@@ -120,6 +151,19 @@ export const historyService = {
       timestamp: Date.now(),
     };
 
+    // populate numeric date/time fields
+    try {
+      const d = new Date(entry.timestamp);
+      entry.day = String(d.getDate()).padStart(2, "0");
+      entry.month = String(d.getMonth() + 1).padStart(2, "0");
+      entry.year = String(d.getFullYear()).slice(-2).padStart(2, "0");
+      entry.time = `${String(d.getHours()).padStart(2, "0")}:${String(
+        d.getMinutes()
+      ).padStart(2, "0")}`;
+    } catch (e) {
+      /* ignore */
+    }
+
     // Deduplicate consecutive identical responses (within a short time
     // window) to avoid double registration caused by overlapping
     // processing paths or retries.
@@ -134,6 +178,17 @@ export const historyService = {
     ) {
       // Update timestamp on existing entry instead of adding a duplicate
       last.timestamp = entry.timestamp;
+      try {
+        const d = new Date(entry.timestamp);
+        last.day = String(d.getDate()).padStart(2, "0");
+        last.month = String(d.getMonth() + 1).padStart(2, "0");
+        last.year = String(d.getFullYear()).slice(-2).padStart(2, "0");
+        last.time = `${String(d.getHours()).padStart(2, "0")}:${String(
+          d.getMinutes()
+        ).padStart(2, "0")}`;
+      } catch (e) {
+        /* ignore */
+      }
       await writeFile(items);
       return last;
     }

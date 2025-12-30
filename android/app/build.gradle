@@ -191,4 +191,6 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+    // Vosk offline speech recognition
+     implementation("com.alphacephei:vosk-android:0.3.75")
 }
