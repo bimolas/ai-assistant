@@ -7,10 +7,9 @@ export async function queryLLM(
   prompt: string,
   opts?: LLMOptions
 ): Promise<string> {
-  // Using direct values (no expo config). Replace the placeholder with your key.
   const proxy = process.env.LLM_PROXY_URL;
   const openrouterKey =
-    "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"; // <-- put your OpenRouter API key here
+    "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";
   const hfKey =
     "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";
   const hfModel = process.env.HUGGINGFACE_MODEL;
@@ -21,7 +20,6 @@ export async function queryLLM(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    // 1) Proxy
     if (proxy) {
       const resp = await fetch(proxy, {
         method: "POST",
@@ -41,12 +39,10 @@ export async function queryLLM(
           json?.output ??
           JSON.stringify(json)
         ).toString();
-      // fallback to text if json parse failed but body has text
       const txtFallback = await resp.text().catch(() => null);
       if (txtFallback) return txtFallback.toString();
     }
 
-    // 2) OpenRouter HTTP
     if (openrouterKey) {
       const body = {
         model,
@@ -88,12 +84,10 @@ export async function queryLLM(
             j?.result ??
             JSON.stringify(j)
         );
-      // fallback to raw text body
       const orText = await resp.text().catch(() => null);
       if (orText) return orText.toString();
     }
 
-    // 3) Hugging Face
     if (hfKey && hfModel) {
       const hfResp = await fetch(
         `https://api-inference.huggingface.co/models/${encodeURIComponent(
