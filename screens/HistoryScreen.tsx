@@ -46,7 +46,6 @@ export const HistoryScreen: React.FC = () => {
     const isLLM = item.type === "llm";
     const showExpand = isLLM && item.expandable;
     const isExpanded = expanded[item.id];
-    // Collapsed single-line text
     const collapsedText = isLLM ? item.short || item.response : item.command;
 
     return (
@@ -68,7 +67,6 @@ export const HistoryScreen: React.FC = () => {
               )}
             </Text>
 
-            {/* timestamp on the same line when collapsed */}
             {!isExpanded && (
               <Text style={styles.timeInline} numberOfLines={1}>
                 {item.day && item.month && item.year && item.time
@@ -79,7 +77,6 @@ export const HistoryScreen: React.FC = () => {
           </View>
         </TouchableOpacity>
 
-        {/* expanded view shows full response/details and full timestamp underneath */}
         {isExpanded && (
           <View style={styles.expandedArea}>
             {isLLM && <Text style={styles.responseText}>{item.response}</Text>}

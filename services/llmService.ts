@@ -10,9 +10,9 @@ export async function queryLLM(
   // Using direct values (no expo config). Replace the placeholder with your key.
   const proxy = process.env.LLM_PROXY_URL;
   const openrouterKey =
-    "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"; // <-- put your OpenRouter API key here
+    "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"; // <-- put your OpenRouter API key here
   const hfKey =
-    "sk-or-v1-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";
+    "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";
   const hfModel = process.env.HUGGINGFACE_MODEL;
   const timeoutMs = opts?.timeoutMs ?? 20000;
   const model = opts?.model ?? process.env.LLM_MODEL ?? "deepseek/deepseek-r1";

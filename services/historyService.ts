@@ -1,21 +1,3 @@
-/**
- * Context7
- * ----------
- * History service for Unit 2B voice assistant.
- * Stores a small JSON file in the app document directory containing
- * recent voice commands and timestamps.
- *
- * Migration note:
- * The modern Expo Filesystem API introduced `File` / `Directory` classes.
- * For compatibility across the project we import the legacy API from
- * `expo-file-system/legacy` which preserves `readAsStringAsync` /
- * `writeAsStringAsync` helpers. To migrate fully to the new API, move
- * storage to `File` and `Directory` types and use the async methods
- * described in the Expo Filesystem docs.
- *
- * See: https://docs.expo.dev/versions/latest/sdk/filesystem/
- */
-
 import * as FileSystem from "expo-file-system/legacy";
 
 export interface HistoryEntry {
@@ -24,12 +6,12 @@ export interface HistoryEntry {
   timestamp: number;
   response?: string;
   type?: string;
-  short?: string; // Truncated display text
-  expandable?: boolean; // If true, can expand to see full details
-  day?: string; // two-digit day
-  month?: string; // two-digit month
-  year?: string; // two-digit year
-  time?: string; // HH:MM
+  short?: string;
+  expandable?: boolean;
+  day?: string; 
+  month?: string; 
+  year?: string;
+  time?: string;
 }
 
 const FILENAME = `${FileSystem.documentDirectory}db-history.json`;
@@ -62,7 +44,6 @@ export const historyService = {
       command,
       timestamp: Date.now(),
     };
-    // add numeric day/month/year (two-digit) and HH:MM time
     try {
       const d = new Date(entry.timestamp);
       const dd = String(d.getDate()).padStart(2, "0");
@@ -76,11 +57,8 @@ export const historyService = {
       entry.year = yy;
       entry.time = tt;
     } catch (e) {
-      /* ignore */
     }
-    // Deduplicate immediate repeats (same command within a short window).
-    // Normalize whitespace and case for comparison so minor formatting
-    // differences don't cause duplicates.
+   
     const normalize = (s: string) =>
       (s || "").trim().replace(/\s+/g, " ").toLowerCase();
     const last = items[0];
@@ -111,18 +89,9 @@ export const historyService = {
     return entry;
   },
 
-  /**
-   * Record a question and the assistant/LLM response together.
-   * This creates a HistoryEntry with `command` set to the question and
-   * `response` set to the assistant reply; `type` will be 'llm' by default.
-   */
-  /**
-   * Record an LLM/2B interaction, storing only the interpreted question or answer.
-   * If the response is long, store a truncated version in `short` and mark as expandable.
-   */
+  
   async addWithResponse(question: string, response: string, type = "llm") {
     const items = await readFile();
-    // Prefer the LLM's answer for display, fallback to question if no answer
     let display =
       response && typeof response === "string" && response.trim()
         ? response.trim()
@@ -137,10 +106,7 @@ export const historyService = {
       expandable = true;
     }
 
-    // For LLM/2B interactions we only store the assistant `response` to
-    // avoid duplicating the answer in both `command` and `response`.
-    // `command` is left empty for these entries. If the response is
-    // long we store a truncated `short` and mark as `expandable`.
+   
     const entry: HistoryEntry = {
       id: String(Date.now()) + Math.random().toString(36).slice(2, 8),
       command: "",
@@ -151,7 +117,6 @@ export const historyService = {
       timestamp: Date.now(),
     };
 
-    // populate numeric date/time fields
     try {
       const d = new Date(entry.timestamp);
       entry.day = String(d.getDate()).padStart(2, "0");
@@ -161,12 +126,10 @@ export const historyService = {
         d.getMinutes()
       ).padStart(2, "0")}`;
     } catch (e) {
-      /* ignore */
+      
     }
 
-    // Deduplicate consecutive identical responses (within a short time
-    // window) to avoid double registration caused by overlapping
-    // processing paths or retries.
+
     const last = items[0];
     const normalizeResp = (s?: string) =>
       (s || "").trim().replace(/\s+/g, " ").toLowerCase();
@@ -176,7 +139,6 @@ export const historyService = {
       normalizeResp(last.response) === normalizeResp(entry.response) &&
       Math.abs(last.timestamp - entry.timestamp) < 3000
     ) {
-      // Update timestamp on existing entry instead of adding a duplicate
       last.timestamp = entry.timestamp;
       try {
         const d = new Date(entry.timestamp);
@@ -187,7 +149,6 @@ export const historyService = {
           d.getMinutes()
         ).padStart(2, "0")}`;
       } catch (e) {
-        /* ignore */
       }
       await writeFile(items);
       return last;
