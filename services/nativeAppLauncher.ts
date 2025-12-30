@@ -1,13 +1,9 @@
 import { NativeModules, Platform } from "react-native";
 
-// The native module we added in Kotlin is named "LauncherModule" (see getName()).
 const { LauncherModule, AppLauncherModule } = NativeModules as any;
 
 export const nativeAppLauncher = {
-  /**
-   * Attempt to launch an app using the native LauncherModule.
-   * If an activityName is provided, it will be passed to the native side.
-   */
+ 
   async launchApp(
     packageName: string,
     activityName?: string
@@ -34,10 +30,8 @@ export const nativeAppLauncher = {
     }
 
     try {
-      // The Kotlin implementation expects (packageName, activityName, Promise)
-      // When activityName is undefined, pass empty string to keep signature consistent.
+    
       const activityArg = activityName || "";
-      // Many RN bridge implementations return a Promise when the native method uses a Promise parameter.
       await nativeModule.launchApp(packageName, activityArg);
       return { success: true };
     } catch (error: any) {
