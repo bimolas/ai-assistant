@@ -10,7 +10,7 @@ export interface InstalledApp {
   version?: string;
   icon?: string;
   isSystemApp?: boolean;
-  mainActivity?: string; // Main launcher activity component name
+  mainActivity?: string; 
 }
 
 class AppDetectionService {
@@ -32,10 +32,8 @@ class AppDetectionService {
 
     try {
       if (Platform.OS === "android") {
-        // Use the react-native-app-list package to get all installed apps
         const installedApps = await getInstalledApps();
 
-        // Transform to our format
         this.appsCache = installedApps.map((app: any) => {
           const packageName = app.packageName || app.package || "unknown";
           const isSystem = this.isSystemApp(packageName);
@@ -49,22 +47,19 @@ class AppDetectionService {
           };
         });
 
-        // Sort: user apps first, then system apps, both alphabetically
         this.appsCache.sort((a, b) => {
           if (a.isSystemApp !== b.isSystemApp) {
-            return a.isSystemApp ? 1 : -1; // User apps first
+            return a.isSystemApp ? 1 : -1; 
           }
           return a.appName.localeCompare(b.appName);
         });
 
         return this.appsCache;
       } else {
-        // iOS doesn't allow querying installed apps
         return [];
       }
     } catch (error) {
       console.error("Error detecting apps:", error);
-      // Fallback to current app info if detection fails
       const appInfo = {
         packageName: Application.applicationId || "unknown",
         appName: Application.applicationName || "Unknown App",
@@ -86,9 +81,7 @@ class AppDetectionService {
         };
       }
 
-      // METHOD 1: Use the native LauncherModule for direct launching (preferred)
       try {
-        // Try without an explicit activity first, then try common activity patterns
         const attemptActivityNames = [
           "",
           this.guessMainActivity(packageName),
@@ -105,7 +98,6 @@ class AppDetectionService {
               return result;
             }
 
-            // If it's a security restriction, stop trying and return the error
             const errLower = (result.error || "").toLowerCase();
             if (
               errLower.includes("security") ||
@@ -114,17 +106,14 @@ class AppDetectionService {
               return result;
             }
 
-            // If native module not loaded, fall through to other methods
             if (
               (result.error || "").includes("not loaded") ||
               (result.error || "").includes("rebuild")
             ) {
-              break; // give up trying activity patterns, proceed to JS fallbacks
+              break; 
             }
 
-            // If this activity failed, continue to next pattern
           } catch (errInner: any) {
-            // If native module threw, likely not available - break to fallbacks
             console.warn(
               "Native launcher threw, falling back to IntentLauncher:",
               errInner?.message
@@ -133,22 +122,18 @@ class AppDetectionService {
           }
         }
       } catch (nativeError: any) {
-        // Native module might not be available (needs rebuild), fall through to fallback
         console.warn(
           "Native launcher error, using fallback:",
           nativeError?.message
         );
       }
 
-      // METHOD 2: Fallback to IntentLauncher (may show picker)
       try {
-        // Special-case Settings: use the dedicated Settings action
         if (packageName === "com.android.settings") {
           await IntentLauncher.startActivityAsync("android.settings.SETTINGS");
         } else {
           await IntentLauncher.startActivityAsync(
             "android.intent.action.MAIN",
-            // Cast to any because expo-intent-launcher types vary between SDKs
             { package: packageName } as any
           );
         }
@@ -167,7 +152,6 @@ class AppDetectionService {
           };
         }
 
-        // Last resort
         try {
           await Linking.openURL(
             `intent://#Intent;action=android.intent.action.MAIN;package=${packageName};end`
@@ -191,12 +175,10 @@ class AppDetectionService {
   }
 
   private guessMainActivity(packageName: string): string {
-    // Return the most common pattern
     return `${packageName}.MainActivity`;
   }
 
   private getAllActivityPatterns(packageName: string): string[] {
-    // Common main activity patterns - try the most common first
     const patterns = [
       ".MainActivity",
       ".ui.MainActivity",
@@ -212,23 +194,18 @@ class AppDetectionService {
   }
 
   private isSystemApp(packageName: string): boolean {
-    // Only block truly system-level apps, not manufacturer apps that users can launch
-    // These are core Android system packages that should never be launched externally
+  
     const coreSystemPatterns = [
       "android.",
-      "com.android.settings", // Settings can be launched, but we'll allow it
+      "com.android.settings",
       "com.android.systemui",
       "com.android.providers.",
       "com.android.server.",
     ];
 
-    // Check if it's a core system package
     const isCoreSystem = coreSystemPatterns.some((pattern) =>
       packageName.startsWith(pattern)
     );
-
-    // For manufacturer apps (MIUI, Samsung, etc.), allow them - they might be launchable
-    // Only block if Android itself blocks it with a SecurityException
     return isCoreSystem;
   }
 
